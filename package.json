@@ -1,0 +1,19 @@
+{
+  "name": "quemecaso",
+  "version": "0.1.0",
+  "description": "Galería colaborativa de fotos y videos para eventos, accesible por QR",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "cookie-session": "^2.1.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "qrcode": "^1.5.3",
+    "sharp": "^0.33.4"
+  }
+}

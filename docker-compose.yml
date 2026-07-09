@@ -1,0 +1,13 @@
+name: quemecaso
+
+services:
+  quemecaso:
+    build: .
+    image: quemecaso
+    container_name: quemecaso
+    ports:
+      - "3000:3000"
+    env_file: .env
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
