@@ -279,15 +279,25 @@ function renderGallery() {
     if (state.isAdmin) {
       const actions = document.createElement('div');
       actions.className = 'tile-actions';
-      actions.innerHTML = `
-        <a class="tile-btn" href="/api/admin/download/${item.id}" title="Descargar">⬇</a>
-        <button class="tile-btn" title="Borrar">🗑</button>
-      `;
-      actions.querySelector('a').addEventListener('click', (e) => e.stopPropagation());
-      actions.querySelector('button').addEventListener('click', (e) => {
+
+      const downloadLink = document.createElement('a');
+      downloadLink.className = 'tile-btn';
+      downloadLink.href = `/api/admin/download/${encodeURIComponent(item.id)}`;
+      downloadLink.title = 'Descargar';
+      downloadLink.textContent = '⬇';
+      downloadLink.addEventListener('click', (e) => e.stopPropagation());
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'tile-btn';
+      deleteBtn.title = 'Borrar';
+      deleteBtn.textContent = '🗑';
+      deleteBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         deleteItem(item);
       });
+
+      actions.appendChild(downloadLink);
+      actions.appendChild(deleteBtn);
       tile.appendChild(actions);
 
       // Círculo de selección, siempre visible para el admin

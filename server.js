@@ -8,14 +8,32 @@ const fs = require('fs');
 const QRCode = require('qrcode');
 const archiver = require('archiver');
 const sharp = require('sharp');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 
 const PORT = process.env.PORT || 3000;
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const THUMB_DIR = path.join(UPLOAD_DIR, '.thumbs');
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.com';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'cambiame';
+const PUBLIC_URL = process.env.PUBLIC_URL || '';
+const IS_HTTPS = PUBLIC_URL.startsWith('https://');
+
+// Sin valores por defecto: un despliegue con el .env a medio configurar
+// no debe arrancar con credenciales o secretos de sesión adivinables.
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+const ADMIN_PASSWORD_HASH_B64 = process.env.ADMIN_PASSWORD_HASH_B64;
+const SESSION_SECRET = process.env.SESSION_SECRET;
+for (const [name, value] of Object.entries({ ADMIN_EMAIL, ADMIN_PASSWORD_HASH_B64, SESSION_SECRET })) {
+  if (!value) {
+    console.error(`Falta ${name} en el .env. Copia .env.example y complétalo antes de arrancar.`);
+    process.exit(1);
+  }
+}
+// El hash bcrypt viaja en base64 en el .env: docker-compose interpreta "$"
+// como sustitución de variables al leer env_file y corrompe el hash en crudo.
+const ADMIN_PASSWORD_HASH = Buffer.from(ADMIN_PASSWORD_HASH_B64, 'base64').toString('utf8');
 
 // Límites y compresión (configurables en .env)
 const MAX_FILE_MB = parseInt(process.env.MAX_FILE_MB || '100', 10); // por archivo
@@ -27,6 +45,23 @@ const THUMB_SIZE = 480; // miniaturas de la galería
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(THUMB_DIR, { recursive: true });
 
+if (IS_HTTPS) app.set('trust proxy', 1); // necesario para que la cookie "secure" funcione tras un proxy HTTPS
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        'default-src': ["'self'"],
+        'style-src': ["'self'", 'https://fonts.googleapis.com'],
+        'font-src': ["'self'", 'https://fonts.gstatic.com'],
+        'img-src': ["'self'", 'data:'],
+        'media-src': ["'self'"],
+        'script-src': ["'self'"],
+      },
+    },
+  })
+);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 // El login del admin está integrado en la página principal
@@ -36,18 +71,47 @@ app.get('/admin.html', (req, res) => res.redirect('/'));
 app.use(
   cookieSession({
     name: 'pasame-la-foto.sid',
-    secret: process.env.SESSION_SECRET || 'pasame-la-foto-secret-cambiame',
+    secret: SESSION_SECRET,
     maxAge: 1000 * 60 * 60 * 24 * 30, // 30 días
     sameSite: 'lax',
+    secure: IS_HTTPS,
   })
 );
 
+// Máximo 10 intentos de login por IP cada 15 minutos
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados intentos, prueba de nuevo más tarde' },
+});
+
 // ---------- Subida de archivos ----------
+
+// Whitelist cerrada de mimetype -> extensión: el nombre final en disco nunca
+// depende del originalname que manda el cliente (evita XSS almacenado vía
+// nombre de archivo) ni de mimetypes peligrosos como image/svg+xml.
+const ALLOWED_MIME_EXT = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/heic': '.heic',
+  'image/heif': '.heic',
+  'image/avif': '.avif',
+  'video/mp4': '.mp4',
+  'video/quicktime': '.mov',
+  'video/webm': '.webm',
+  'video/x-matroska': '.mkv',
+  'video/x-msvideo': '.avi',
+  'video/3gpp': '.3gp',
+};
 
 const storage = multer.diskStorage({
   destination: UPLOAD_DIR,
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
+    const ext = ALLOWED_MIME_EXT[file.mimetype];
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     cb(null, `${unique}${ext}`);
   },
@@ -57,8 +121,8 @@ const upload = multer({
   storage,
   limits: { fileSize: MAX_FILE_MB * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (/^(image|video)\//.test(file.mimetype)) cb(null, true);
-    else cb(new Error('Solo se permiten fotos y videos'));
+    if (ALLOWED_MIME_EXT[file.mimetype]) cb(null, true);
+    else cb(new Error('Solo se permiten fotos y videos en formatos admitidos'));
   },
 });
 
@@ -200,9 +264,13 @@ app.get('/media/:name', (req, res) => {
 
 // ---------- Autenticación admin ----------
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
-  if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+  const validEmail = typeof email === 'string' && email === ADMIN_EMAIL;
+  // bcrypt.compare siempre se ejecuta, aunque el email ya sea inválido,
+  // para no filtrar por temporización si el email existe o no.
+  const validPassword = typeof password === 'string' && (await bcrypt.compare(password, ADMIN_PASSWORD_HASH));
+  if (validEmail && validPassword) {
     req.session.isAdmin = true;
     return res.json({ ok: true });
   }
