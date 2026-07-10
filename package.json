@@ -1,5 +1,5 @@
 {
-  "name": "quemecaso",
+  "name": "pasame-la-foto",
   "version": "0.1.0",
   "description": "Galería colaborativa de fotos y videos para eventos, accesible por QR",
   "main": "server.js",

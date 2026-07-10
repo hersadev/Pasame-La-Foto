@@ -1,10 +1,10 @@
-name: quemecaso
+name: pasame-la-foto
 
 services:
-  quemecaso:
+  pasame-la-foto:
     build: .
-    image: quemecaso
-    container_name: quemecaso
+    image: pasame-la-foto
+    container_name: pasame-la-foto
     ports:
       - "3000:3000"
     env_file: .env
