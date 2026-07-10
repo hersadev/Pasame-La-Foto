@@ -38,10 +38,12 @@ La web queda en `http://localhost:3000`.
 | Variable | Por defecto | Descripción |
 |---|---|---|
 | `PORT` | `3000` | Puerto del servidor. |
-| `ADMIN_EMAIL` | — | Email del administrador. |
-| `ADMIN_PASSWORD` | — | Contraseña del administrador. |
-| `SESSION_SECRET` | — | Cadena aleatoria larga para firmar las sesiones. |
-| `PUBLIC_URL` | URL del propio servidor | URL pública a la que apunta el código QR. |
+| `ADMIN_EMAIL` | *(obligatoria)* | Email del administrador. |
+| `ADMIN_PASSWORD_HASH_B64` | *(obligatoria)* | Hash bcrypt de la contraseña del administrador, en base64 (evita que el `$` del hash choque con la sustitución de variables de docker-compose). Genéralo con `node -e "console.log(Buffer.from(require('bcryptjs').hashSync('tu-contraseña', 12)).toString('base64'))"`. |
+| `SESSION_SECRET` | *(obligatoria)* | Cadena aleatoria larga para firmar las sesiones. |
+| `PUBLIC_URL` | URL del propio servidor | URL pública a la que apunta el código QR. Si empieza por `https://`, la cookie de sesión se marca como `secure`. |
+
+El servidor no arranca si falta alguna de las variables obligatorias.
 | `MAX_FILE_MB` | `100` | Tamaño máximo por archivo (MB). |
 | `MAX_TOTAL_GB` | `20` | Espacio total del evento; al alcanzarlo se rechazan subidas. |
 | `IMAGE_MAX_SIDE` | `2560` | Lado mayor (px) de las fotos tras comprimirlas. |
@@ -62,9 +64,17 @@ La web queda en `http://localhost:3000`.
 
 Node.js + Express, con multer (subidas), sharp (compresión y miniaturas), cookie-session (sesión del admin firmada en la cookie, sin estado en el servidor), qrcode (código QR) y archiver (ZIP). Frontend en HTML, CSS y JavaScript sin frameworks.
 
+## 🔒 Seguridad
+
+- El nombre de archivo guardado en disco se deriva de una whitelist cerrada de mimetypes permitidos (nunca del nombre original que manda el cliente), lo que evita inyección de contenido en el nombre y bloquea formatos peligrosos como SVG.
+- La contraseña del admin se guarda hasheada con bcrypt (`ADMIN_PASSWORD_HASH`); nunca en texto plano.
+- El login está limitado a 10 intentos por IP cada 15 minutos.
+- Cabeceras de seguridad con helmet (CSP, `X-Content-Type-Options`, etc.).
+- La cookie de sesión se marca `secure` automáticamente cuando `PUBLIC_URL` usa HTTPS.
+- El servidor rechaza arrancar si falta `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH` o `SESSION_SECRET`.
+
 ## 🗺️ Pendiente
 
 - Transcodificación de video con ffmpeg y miniaturas de video.
 - Paginación de la galería para eventos grandes.
 - Nombre del invitado al subir.
-- Contraseña del admin hasheada.
