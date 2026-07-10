@@ -35,8 +35,8 @@ app.get('/admin.html', (req, res) => res.redirect('/'));
 // sobrevive a reinicios y rebuilds mientras SESSION_SECRET no cambie
 app.use(
   cookieSession({
-    name: 'quemecaso.sid',
-    secret: process.env.SESSION_SECRET || 'quemecaso-secret-cambiame',
+    name: 'pasame-la-foto.sid',
+    secret: process.env.SESSION_SECRET || 'pasame-la-foto-secret-cambiame',
     maxAge: 1000 * 60 * 60 * 24 * 30, // 30 días
     sameSite: 'lax',
   })
@@ -232,7 +232,7 @@ app.get('/api/admin/zip', requireAdmin, (req, res) => {
   const names = String(req.query.files || '').split(',').filter(Boolean);
   const files = names.map(safeFilePath).filter((p) => p && fs.existsSync(p));
   if (!files.length) return res.status(400).json({ error: 'Sin archivos válidos' });
-  res.attachment('quemecaso.zip');
+  res.attachment('pasame-la-foto.zip');
   const zip = archiver('zip', { zlib: { level: 1 } }); // fotos/videos ya vienen comprimidos
   zip.on('error', (err) => res.destroy(err));
   zip.pipe(res);
@@ -273,5 +273,5 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`QUE ME CASO! escuchando en http://localhost:${PORT}`);
+  console.log(`Pásame la foto escuchando en http://localhost:${PORT}`);
 });

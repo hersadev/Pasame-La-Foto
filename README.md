@@ -1,6 +1,6 @@
-# 📸 QUE ME CASO!
+# 📸 Pásame la foto
 
-Galería colaborativa de fotos y videos para bodas y eventos. Los invitados escanean un código QR, suben sus recuerdos desde el móvil y ven al momento lo que comparten los demás. Sin apps, sin registros, sin base de datos.
+Galería colaborativa de fotos y videos para cualquier evento. Los invitados escanean un código QR, suben sus recuerdos desde el móvil y ven al momento lo que comparten los demás. Sin apps, sin registros, sin base de datos.
 
 ## ✨ Características
 
