@@ -16,6 +16,8 @@ const loginBtn = document.getElementById('loginBtn');
 const adminMenuBtn = document.getElementById('adminMenuBtn');
 const adminMenu = document.getElementById('adminMenu');
 const menuQr = document.getElementById('menuQr');
+const menuZipAll = document.getElementById('menuZipAll');
+const menuSettings = document.getElementById('menuSettings');
 const menuLogout = document.getElementById('menuLogout');
 const selectAllTop = document.getElementById('selectAllTop');
 const selectAllTopLabel = document.getElementById('selectAllTopLabel');
@@ -24,6 +26,15 @@ const qrModal = document.getElementById('qrModal');
 const qrImage = document.getElementById('qrImage');
 const loginForm = document.getElementById('loginForm');
 const loginError = document.getElementById('loginError');
+
+const settingsModal = document.getElementById('settingsModal');
+const settingsForm = document.getElementById('settingsForm');
+const eventDateInput = document.getElementById('eventDate');
+const watermarkTextInput = document.getElementById('watermarkText');
+
+const uploadPermModal = document.getElementById('uploadPermModal');
+const uploadPermOk = document.getElementById('uploadPermOk');
+const uploadPermCancel = document.getElementById('uploadPermCancel');
 
 const viewer = document.getElementById('viewer');
 const viewerContent = document.getElementById('viewerContent');
@@ -85,7 +96,7 @@ loginForm.addEventListener('submit', async (e) => {
     loginModal.hidden = true;
     loginForm.reset();
     await refreshSession();
-    renderGallery();
+    await loadGallery(); // re-pide /api/media: las URLs de fotos cambian según el rol
     toast('Sesión de administrador iniciada');
   } else {
     loginError.textContent = 'Credenciales incorrectas';
@@ -116,16 +127,48 @@ menuQr.addEventListener('click', () => {
   qrModal.hidden = false;
 });
 
+menuZipAll.addEventListener('click', () => {
+  adminMenu.hidden = true;
+  window.location.href = '/api/admin/zip?all=1';
+});
+
+menuSettings.addEventListener('click', async () => {
+  adminMenu.hidden = true;
+  const res = await fetch('/api/admin/settings');
+  const settings = await res.json();
+  eventDateInput.value = settings.eventDate || '';
+  watermarkTextInput.value = settings.watermarkText || '';
+  settingsModal.hidden = false;
+});
+
+settingsForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const res = await fetch('/api/admin/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      eventDate: eventDateInput.value || null,
+      watermarkText: watermarkTextInput.value,
+    }),
+  });
+  if (res.ok) {
+    settingsModal.hidden = true;
+    toast('Ajustes guardados');
+  } else {
+    toast('No se pudieron guardar los ajustes', true);
+  }
+});
+
 menuLogout.addEventListener('click', async () => {
   adminMenu.hidden = true;
   await fetch('/api/logout', { method: 'POST' });
   await refreshSession();
-  renderGallery();
+  await loadGallery(); // re-pide /api/media: las URLs de fotos cambian según el rol
   toast('Sesión cerrada');
 });
 
 // Cerrar modales tocando el fondo
-for (const modal of [loginModal, qrModal]) {
+for (const modal of [loginModal, qrModal, settingsModal]) {
   modal.querySelector('[data-close]').addEventListener('click', () => (modal.hidden = true));
 }
 
@@ -228,16 +271,67 @@ document.getElementById('selDelete').addEventListener('click', async () => {
   }
 });
 
+// ---------- Compresión de imágenes en el cliente ----------
+// Reduce el peso antes de subir; si algo falla se usa el archivo original
+// (el servidor vuelve a comprimir de todos modos en processUpload).
+
+const MAX_CLIENT_SIDE = 2000;
+
+async function compressImage(file) {
+  if (!file.type.startsWith('image/') || file.type === 'image/heic' || file.type === 'image/heif') return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_CLIENT_SIDE / Math.max(bitmap.width, bitmap.height));
+    if (scale >= 1) return file; // ya es lo bastante pequeña
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+  } catch {
+    return file; // formato no soportado por el navegador: se sube tal cual
+  }
+}
+
 // ---------- Subida con progreso ----------
+
+let pendingFiles = null;
 
 fileInput.addEventListener('change', () => {
   if (!fileInput.files.length) return;
-  const formData = new FormData();
-  for (const file of fileInput.files) formData.append('files', file);
-  const total = fileInput.files.length;
+  pendingFiles = [...fileInput.files];
+  uploadPermModal.querySelector('input[value="all"]').checked = true;
+  uploadPermModal.hidden = false;
+});
 
+uploadPermCancel.addEventListener('click', () => {
+  uploadPermModal.hidden = true;
+  pendingFiles = null;
+  fileInput.value = '';
+});
+
+uploadPermModal.querySelector('[data-close]').addEventListener('click', () => uploadPermCancel.click());
+
+uploadPermOk.addEventListener('click', async () => {
+  const downloadable = uploadPermModal.querySelector('input[name="downloadable"]:checked').value;
+  const files = pendingFiles;
+  uploadPermModal.hidden = true;
+  pendingFiles = null;
+  if (!files || !files.length) return;
+
+  const total = files.length;
   progress.hidden = false;
   progressBar.style.width = '0%';
+  progressText.textContent = 'Comprimiendo…';
+
+  const compressed = await Promise.all(files.map(compressImage));
+
+  const formData = new FormData();
+  for (const file of compressed) formData.append('files', file);
+  formData.append('downloadable', downloadable);
+
   progressText.textContent = 'Subiendo…';
 
   const xhr = new XMLHttpRequest();
@@ -348,6 +442,19 @@ function renderGallery() {
       });
       tile.appendChild(check);
       tile.classList.toggle('selected', state.selected.has(item.id));
+    } else if (item.canDownload) {
+      const actions = document.createElement('div');
+      actions.className = 'tile-actions';
+
+      const downloadLink = document.createElement('a');
+      downloadLink.className = 'tile-btn';
+      downloadLink.href = `/api/download/${encodeURIComponent(item.id)}`;
+      downloadLink.title = 'Descargar';
+      downloadLink.textContent = '⬇';
+      downloadLink.addEventListener('click', (e) => e.stopPropagation());
+
+      actions.appendChild(downloadLink);
+      tile.appendChild(actions);
     }
 
     tile.addEventListener('click', () => openViewer(index));
@@ -396,8 +503,9 @@ function renderViewer() {
     viewerContent.appendChild(video);
   }
 
-  viewerActions.hidden = !state.isAdmin;
-  if (state.isAdmin) viewerDownload.href = `/api/admin/download/${item.id}`;
+  viewerActions.hidden = !state.isAdmin && !item.canDownload;
+  viewerDelete.hidden = !state.isAdmin;
+  viewerDownload.href = state.isAdmin ? `/api/admin/download/${item.id}` : `/api/download/${item.id}`;
 }
 
 function closeViewer() {

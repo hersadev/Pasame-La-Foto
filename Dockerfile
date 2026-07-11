@@ -1,5 +1,18 @@
 FROM node:20-alpine
 
+# fontconfig + una fuente base: sin esto sharp no puede dibujar el texto de
+# la marca de agua sobre las imágenes (el composite no falla, pero el texto
+# sale invisible por no encontrar ninguna fuente que rasterizar). ttf-dejavu
+# queda como respaldo si la fuente elegante de abajo no se pudiera cargar.
+RUN apk add --no-cache fontconfig ttf-dejavu
+
+# Fuente elegante para la marca de agua (Playfair Display Italic).
+# Se instala como fuente del sistema porque el renderizador SVG de sharp no
+# soporta @font-face con la fuente incrustada en base64: solo encuentra
+# fuentes ya registradas en fontconfig.
+COPY assets/fonts/ /usr/share/fonts/truetype/wedding/
+RUN fc-cache -f
+
 WORKDIR /app
 
 COPY package.json ./

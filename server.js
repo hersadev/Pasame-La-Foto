@@ -17,6 +17,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const THUMB_DIR = path.join(UPLOAD_DIR, '.thumbs');
+const DATA_DIR = path.join(UPLOAD_DIR, '.data');
+const WM_THUMB_DIR = path.join(UPLOAD_DIR, '.wm-thumbs');
+const WM_DISPLAY_DIR = path.join(UPLOAD_DIR, '.wm-display');
+const SETTINGS_PATH = path.join(DATA_DIR, 'settings.json');
+const MEDIA_META_PATH = path.join(DATA_DIR, 'media-meta.json');
+const EXPIRATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 días desde la fecha del evento
 const PUBLIC_URL = process.env.PUBLIC_URL || '';
 const IS_HTTPS = PUBLIC_URL.startsWith('https://');
 
@@ -44,6 +50,9 @@ const THUMB_SIZE = 480; // miniaturas de la galería
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 fs.mkdirSync(THUMB_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(WM_THUMB_DIR, { recursive: true });
+fs.mkdirSync(WM_DISPLAY_DIR, { recursive: true });
 
 if (IS_HTTPS) app.set('trust proxy', 1); // necesario para que la cookie "secure" funcione tras un proxy HTTPS
 
@@ -154,13 +163,103 @@ function thumbPathFor(name) {
   return path.join(THUMB_DIR, path.basename(name).replace(/\.[^.]+$/, '') + '.jpg');
 }
 
+// ---------- Configuración y metadatos (sin base de datos: todo en JSON) ----------
+
+function readJson(filePath, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+}
+
+function readSettings() {
+  return readJson(SETTINGS_PATH, { eventDate: null, watermarkText: '' });
+}
+
+function writeSettings(settings) {
+  writeJson(SETTINGS_PATH, settings);
+}
+
+function readMediaMeta() {
+  return readJson(MEDIA_META_PATH, {});
+}
+
+function writeMediaMeta(meta) {
+  writeJson(MEDIA_META_PATH, meta);
+}
+
+function canGuestDownload(name, meta) {
+  return meta[name]?.downloadable === 'all';
+}
+
 function deleteMedia(name) {
   const filePath = safeFilePath(name);
   if (!filePath || !fs.existsSync(filePath)) return false;
   fs.unlinkSync(filePath);
   const thumb = thumbPathFor(name);
   if (fs.existsSync(thumb)) fs.unlinkSync(thumb);
+  const wmThumb = path.join(WM_THUMB_DIR, path.basename(name));
+  if (fs.existsSync(wmThumb)) fs.unlinkSync(wmThumb);
+  const wmDisplay = path.join(WM_DISPLAY_DIR, path.basename(name));
+  if (fs.existsSync(wmDisplay)) fs.unlinkSync(wmDisplay);
+  const meta = readMediaMeta();
+  if (meta[name]) {
+    delete meta[name];
+    writeMediaMeta(meta);
+  }
   return true;
+}
+
+// Genera (o reutiliza de caché) una versión con marca de agua de texto.
+// La caché se invalida sola si settings.json es más reciente que el archivo cacheado.
+async function getWatermarked(sourcePath, cacheDir) {
+  const cachedPath = path.join(cacheDir, path.basename(sourcePath));
+  const settingsMTime = fs.existsSync(SETTINGS_PATH) ? fs.statSync(SETTINGS_PATH).mtimeMs : 0;
+  if (fs.existsSync(cachedPath) && fs.statSync(cachedPath).mtimeMs >= settingsMTime) {
+    return cachedPath;
+  }
+  const { watermarkText } = readSettings();
+  const image = sharp(sourcePath);
+  const { width, height } = await image.metadata();
+  const fontSize = Math.max(12, Math.round((width || 800) * 0.032));
+  const escaped = String(watermarkText)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+    <text x="${width - 14}" y="${height - 14}" text-anchor="end" font-family="'Playfair Display', serif"
+      font-style="italic" font-size="${fontSize}" fill="white" fill-opacity="0.9"
+      style="paint-order: stroke; stroke: rgba(0,0,0,0.5); stroke-width: ${Math.max(1, fontSize * 0.06)}px">${escaped}</text>
+  </svg>`;
+  await image.composite([{ input: Buffer.from(svg) }]).toFile(cachedPath);
+  return cachedPath;
+}
+
+// Sirve `sourcePath` con marca de agua si aplica (imagen + texto configurado + no admin);
+// si algo falla al generarla, sirve el original para no romper la vista.
+// La misma URL sirve contenido distinto según la sesión (admin ve el original,
+// el invitado la versión con marca de agua): sin "no-store" el navegador podría
+// reutilizar en caché la versión de invitado al iniciar sesión como admin.
+async function sendMaybeWatermarked(req, res, sourcePath, cacheDir) {
+  const { watermarkText } = readSettings();
+  const isImage = mediaType(sourcePath) === 'image';
+  res.setHeader('Cache-Control', 'no-store');
+  if (!req.session.isAdmin && isImage && watermarkText) {
+    try {
+      const wmPath = await getWatermarked(sourcePath, cacheDir);
+      res.setHeader('Content-Disposition', 'inline');
+      return res.sendFile(wmPath);
+    } catch {
+      // sigue abajo y sirve el original
+    }
+  }
+  res.setHeader('Content-Disposition', 'inline');
+  res.sendFile(sourcePath);
 }
 
 // Rechaza subidas cuando el evento ya ocupa el máximo configurado
@@ -212,6 +311,8 @@ async function processUpload(file) {
       // sin miniatura la galería usa el archivo completo
     }
   }
+
+  return path.basename(finalPath);
 }
 
 // ---------- API pública (invitados) ----------
@@ -219,7 +320,11 @@ async function processUpload(file) {
 // Subir uno o varios archivos (las imágenes se comprimen al recibirlas)
 app.post('/api/upload', checkTotalSpace, upload.array('files', 20), async (req, res, next) => {
   try {
-    await Promise.all(req.files.map(processUpload));
+    const downloadable = req.body.downloadable === 'all' ? 'all' : 'admin';
+    const finalNames = await Promise.all(req.files.map(processUpload));
+    const meta = readMediaMeta();
+    for (const name of finalNames) meta[name] = { downloadable };
+    writeMediaMeta(meta);
     res.json({ ok: true, count: req.files.length });
   } catch (err) {
     next(err);
@@ -228,6 +333,13 @@ app.post('/api/upload', checkTotalSpace, upload.array('files', 20), async (req, 
 
 // Listar los archivos subidos
 app.get('/api/media', (req, res) => {
+  const meta = readMediaMeta();
+  // El contenido de /media y /thumbs depende de la sesión (admin ve el
+  // original, el invitado la versión con marca de agua) pero la ruta sería
+  // idéntica para los dos; algunos navegadores reutilizan igualmente una
+  // imagen ya vista para esa misma URL aunque el servidor mande "no-store".
+  // Con esta marca en la query, admin e invitado nunca comparten URL.
+  const roleTag = req.session.isAdmin ? 'a' : 'g';
   const files = fs
     .readdirSync(UPLOAD_DIR)
     .filter((f) => mediaType(f) !== 'other')
@@ -237,29 +349,40 @@ app.get('/api/media', (req, res) => {
       return {
         id: f,
         type: mediaType(f),
-        url: `/media/${f}`,
-        thumb: hasThumb ? `/thumbs/${path.basename(thumbPathFor(f))}` : null,
+        url: `/media/${f}?v=${roleTag}`,
+        thumb: hasThumb ? `/thumbs/${path.basename(thumbPathFor(f))}?v=${roleTag}` : null,
         uploadedAt: stat.mtimeMs,
+        canDownload: req.session.isAdmin || canGuestDownload(f, meta),
       };
     })
     .sort((a, b) => b.uploadedAt - a.uploadedAt);
   res.json(files);
 });
 
-// Servir una miniatura
-app.get('/thumbs/:name', (req, res) => {
+// Servir una miniatura (con marca de agua para invitados si está configurada)
+app.get('/thumbs/:name', async (req, res) => {
   const resolved = path.resolve(THUMB_DIR, req.params.name);
   if (!resolved.startsWith(THUMB_DIR + path.sep) || !fs.existsSync(resolved)) return res.status(404).end();
-  res.setHeader('Content-Disposition', 'inline');
-  res.sendFile(resolved);
+  await sendMaybeWatermarked(req, res, resolved, WM_THUMB_DIR);
 });
 
-// Servir un archivo SOLO para visualización (inline, no como descarga)
-app.get('/media/:name', (req, res) => {
+// Servir un archivo SOLO para visualización (inline, no como descarga;
+// con marca de agua para invitados si está configurada)
+app.get('/media/:name', async (req, res) => {
   const filePath = safeFilePath(req.params.name);
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).end();
-  res.setHeader('Content-Disposition', 'inline');
-  res.sendFile(filePath);
+  await sendMaybeWatermarked(req, res, filePath, WM_DISPLAY_DIR);
+});
+
+// Descargar un archivo si está permitido para todos (o si es el admin); siempre sin marca de agua
+app.get('/api/download/:name', (req, res) => {
+  const filePath = safeFilePath(req.params.name);
+  if (!filePath || !fs.existsSync(filePath)) return res.status(404).end();
+  const meta = readMediaMeta();
+  if (!req.session.isAdmin && !canGuestDownload(req.params.name, meta)) {
+    return res.status(403).json({ error: 'Descarga no permitida' });
+  }
+  res.download(filePath);
 });
 
 // ---------- Autenticación admin ----------
@@ -295,9 +418,12 @@ app.get('/api/admin/download/:name', requireAdmin, (req, res) => {
   res.download(filePath);
 });
 
-// Descargar varios archivos en un ZIP (?files=a.jpg,b.mp4)
+// Descargar varios archivos en un ZIP (?files=a.jpg,b.mp4), o toda la galería (?all=1)
 app.get('/api/admin/zip', requireAdmin, (req, res) => {
-  const names = String(req.query.files || '').split(',').filter(Boolean);
+  const names =
+    req.query.all === '1'
+      ? fs.readdirSync(UPLOAD_DIR).filter((f) => mediaType(f) !== 'other')
+      : String(req.query.files || '').split(',').filter(Boolean);
   const files = names.map(safeFilePath).filter((p) => p && fs.existsSync(p));
   if (!files.length) return res.status(400).json({ error: 'Sin archivos válidos' });
   res.attachment('pasame-la-foto.zip');
@@ -321,6 +447,24 @@ app.delete('/api/admin/media/:name', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Ajustes del evento (fecha para la expiración, texto de marca de agua) ----------
+
+app.get('/api/admin/settings', requireAdmin, (req, res) => {
+  res.json(readSettings());
+});
+
+app.post('/api/admin/settings', requireAdmin, (req, res) => {
+  const { eventDate, watermarkText } = req.body || {};
+  if (eventDate && Number.isNaN(new Date(eventDate).getTime())) {
+    return res.status(400).json({ error: 'Fecha de evento no válida' });
+  }
+  const settings = readSettings();
+  settings.eventDate = eventDate || null;
+  settings.watermarkText = String(watermarkText || '').slice(0, 80);
+  writeSettings(settings);
+  res.json({ ok: true });
+});
+
 // ---------- Código QR ----------
 
 // PNG con el QR que apunta a la web (configurable con PUBLIC_URL en .env)
@@ -329,6 +473,37 @@ app.get('/qr', async (req, res) => {
   const png = await QRCode.toBuffer(base, { width: 600, margin: 2 });
   res.type('png').send(png);
 });
+
+// ---------- Expiración automática del evento ----------
+// 30 días después de la fecha de evento fijada por el admin, se borra todo
+// el contenido subido. La fecha vuelve a null para poder reutilizar el
+// despliegue en un evento siguiente (la marca de agua se conserva).
+
+function clearDir(dir) {
+  for (const f of fs.readdirSync(dir)) {
+    const p = path.join(dir, f);
+    if (fs.statSync(p).isFile()) fs.unlinkSync(p);
+  }
+}
+
+function checkExpiration() {
+  const settings = readSettings();
+  if (!settings.eventDate) return;
+  const expiresAt = new Date(settings.eventDate).getTime() + EXPIRATION_MS;
+  if (Date.now() < expiresAt) return;
+
+  clearDir(UPLOAD_DIR);
+  clearDir(THUMB_DIR);
+  clearDir(WM_THUMB_DIR);
+  clearDir(WM_DISPLAY_DIR);
+  writeMediaMeta({});
+  settings.eventDate = null;
+  writeSettings(settings);
+  console.log('Evento expirado: se ha borrado todo el contenido subido.');
+}
+
+checkExpiration();
+setInterval(checkExpiration, 60 * 60 * 1000);
 
 // ---------- Manejo de errores ----------
 
