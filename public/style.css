@@ -55,6 +55,7 @@ button {
   background: rgba(245, 234, 216, 0.85);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
 }
 
 .brand {
@@ -91,11 +92,42 @@ button {
   opacity: 0.6;
 }
 
+/* Desplegable de acciones de admin: se abre bajo el botón, no como modal */
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 1.2rem;
+  margin-top: 0.5rem;
+  min-width: 210px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  transform-origin: top right;
+  animation: dropdownIn 0.16s ease;
+}
+
+@keyframes dropdownIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
 /* ============ Portada ============ */
 
 .hero {
   position: relative;
-  text-align: left;
+  text-align: center;
   padding: 2.8rem 1.5rem 2.2rem;
   overflow: hidden;
 }
@@ -115,13 +147,14 @@ button {
 .hero h1 {
   font-family: var(--serif);
   font-weight: 400;
-  font-size: clamp(2.1rem, 9vw, 3.2rem);
+  font-size: clamp(1.5rem, 7.5vw, 3.2rem);
   line-height: 1.1;
-  max-width: 14ch;
+  white-space: nowrap;
+  margin: 0 auto;
 }
 
 .hero-sub {
-  margin-top: 0.7rem;
+  margin: 0.7rem auto 0;
   color: var(--muted);
   font-size: 1rem;
   max-width: 32ch;
@@ -144,6 +177,39 @@ main {
   max-width: 1100px;
   margin: 0 auto;
   padding: 0 0.4rem;
+}
+
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.6rem 0 0.7rem;
+  padding: 0.5rem 0.9rem;
+  border: none;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.toolbar-btn svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: var(--ink);
+  opacity: 0.75;
+}
+
+.toolbar-btn.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-dark);
+}
+
+.toolbar-btn.active svg {
+  fill: var(--accent-dark);
+  opacity: 1;
 }
 
 .gallery {
@@ -581,13 +647,6 @@ body.selecting .fab {
 }
 
 /* ============ Menú de administrador ============ */
-
-.modal-menu {
-  padding: 0.6rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
 
 .menu-item {
   display: flex;
