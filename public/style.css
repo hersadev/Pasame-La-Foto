@@ -923,6 +923,10 @@ body.landing-body {
 .landing {
   position: relative;
   overflow: hidden;
+  /* Anula el max-width que el CSS base da a <main>: el recorte de los blobs
+     decorativos debe caer en el borde real de la pantalla, no en la columna
+     centrada de 1100px (dejaba los círculos cortados en mitad del fondo) */
+  max-width: none;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
