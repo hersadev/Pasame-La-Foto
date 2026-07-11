@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "invitacion": "node scripts/invitacion.js"
   },
   "dependencies": {
     "archiver": "^7.0.1",
