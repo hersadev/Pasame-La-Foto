@@ -5,6 +5,7 @@ const cookieSession = require('cookie-session');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const QRCode = require('qrcode');
 const archiver = require('archiver');
 const sharp = require('sharp');
@@ -16,43 +17,29 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
-const THUMB_DIR = path.join(UPLOAD_DIR, '.thumbs');
 const DATA_DIR = path.join(UPLOAD_DIR, '.data');
-const WM_THUMB_DIR = path.join(UPLOAD_DIR, '.wm-thumbs');
-const WM_DISPLAY_DIR = path.join(UPLOAD_DIR, '.wm-display');
-const SETTINGS_PATH = path.join(DATA_DIR, 'settings.json');
-const MEDIA_META_PATH = path.join(DATA_DIR, 'media-meta.json');
+const USERS_PATH = path.join(DATA_DIR, 'users.json');
+const INVITES_PATH = path.join(DATA_DIR, 'invites.json');
 const EXPIRATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 días desde la fecha del evento
-const PUBLIC_URL = process.env.PUBLIC_URL || '';
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
 const IS_HTTPS = PUBLIC_URL.startsWith('https://');
 
 // Sin valores por defecto: un despliegue con el .env a medio configurar
-// no debe arrancar con credenciales o secretos de sesión adivinables.
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
-const ADMIN_PASSWORD_HASH_B64 = process.env.ADMIN_PASSWORD_HASH_B64;
+// no debe arrancar con un secreto de sesión adivinable.
 const SESSION_SECRET = process.env.SESSION_SECRET;
-for (const [name, value] of Object.entries({ ADMIN_EMAIL, ADMIN_PASSWORD_HASH_B64, SESSION_SECRET })) {
-  if (!value) {
-    console.error(`Falta ${name} en el .env. Copia .env.example y complétalo antes de arrancar.`);
-    process.exit(1);
-  }
+if (!SESSION_SECRET) {
+  console.error('Falta SESSION_SECRET en el .env. Copia .env.example y complétalo antes de arrancar.');
+  process.exit(1);
 }
-// El hash bcrypt viaja en base64 en el .env: docker-compose interpreta "$"
-// como sustitución de variables al leer env_file y corrompe el hash en crudo.
-const ADMIN_PASSWORD_HASH = Buffer.from(ADMIN_PASSWORD_HASH_B64, 'base64').toString('utf8');
 
 // Límites y compresión (configurables en .env)
 const MAX_FILE_MB = parseInt(process.env.MAX_FILE_MB || '100', 10); // por archivo
-const MAX_TOTAL_GB = parseFloat(process.env.MAX_TOTAL_GB || '20'); // total del evento
+const MAX_TOTAL_GB = parseFloat(process.env.MAX_TOTAL_GB || '20'); // total por evento
 const IMAGE_MAX_SIDE = parseInt(process.env.IMAGE_MAX_SIDE || '2560', 10); // lado mayor tras comprimir
 const IMAGE_QUALITY = parseInt(process.env.IMAGE_QUALITY || '82', 10); // calidad JPEG
 const THUMB_SIZE = 480; // miniaturas de la galería
 
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-fs.mkdirSync(THUMB_DIR, { recursive: true });
 fs.mkdirSync(DATA_DIR, { recursive: true });
-fs.mkdirSync(WM_THUMB_DIR, { recursive: true });
-fs.mkdirSync(WM_DISPLAY_DIR, { recursive: true });
 
 if (IS_HTTPS) app.set('trust proxy', 1); // necesario para que la cookie "secure" funcione tras un proxy HTTPS
 
@@ -72,9 +59,9 @@ app.use(
   })
 );
 app.use(express.json());
+// event.html solo tiene sentido bajo /e/<id> (app.js saca el evento de la URL)
+app.get('/event.html', (req, res) => res.redirect('/'));
 app.use(express.static(path.join(__dirname, 'public')));
-// El login del admin está integrado en la página principal
-app.get('/admin.html', (req, res) => res.redirect('/'));
 // La sesión viaja firmada en la cookie (sin estado en el servidor):
 // sobrevive a reinicios y rebuilds mientras SESSION_SECRET no cambie
 app.use(
@@ -95,6 +82,89 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Demasiados intentos, prueba de nuevo más tarde' },
 });
+
+// Máximo 5 registros por IP cada hora
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados registros, prueba de nuevo más tarde' },
+});
+
+// ---------- Usuarios y eventos ----------
+// Cada cuenta tiene su evento: los archivos viven en uploads/<eventId>/ y la
+// estructura interna replica la del proyecto original (miniaturas, cachés de
+// marca de agua y metadatos en subcarpetas ocultas del propio evento).
+
+const EVENT_ID_RE = /^[a-z0-9]{10}$/;
+const USERNAME_RE = /^[a-z0-9._-]{3,30}$/;
+const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+
+function newEventId() {
+  return Array.from({ length: 10 }, () => ID_ALPHABET[crypto.randomInt(ID_ALPHABET.length)]).join('');
+}
+
+function eventDirs(eventId) {
+  const dir = path.join(UPLOAD_DIR, eventId);
+  return {
+    id: eventId,
+    dir,
+    thumbs: path.join(dir, '.thumbs'),
+    wmThumbs: path.join(dir, '.wm-thumbs'),
+    wmDisplay: path.join(dir, '.wm-display'),
+    settingsPath: path.join(dir, '.data', 'settings.json'),
+    mediaMetaPath: path.join(dir, '.data', 'media-meta.json'),
+  };
+}
+
+function createEventDirs(ev) {
+  for (const d of [ev.dir, ev.thumbs, ev.wmThumbs, ev.wmDisplay, path.dirname(ev.settingsPath)]) {
+    fs.mkdirSync(d, { recursive: true });
+  }
+}
+
+function readUsers() {
+  return readJson(USERS_PATH, {});
+}
+
+function writeUsers(users) {
+  writeJson(USERS_PATH, users);
+}
+
+function readInvites() {
+  return readJson(INVITES_PATH, []);
+}
+
+function writeInvites(codes) {
+  writeJson(INVITES_PATH, codes);
+}
+
+// eventId del usuario con sesión iniciada (o null)
+function sessionEventId(req) {
+  const username = req.session.user;
+  if (!username) return null;
+  return readUsers()[username]?.eventId || null;
+}
+
+function isEventAdmin(req, eventId) {
+  return sessionEventId(req) === eventId;
+}
+
+// Valida el :eventId de la URL y deja el evento en req.event
+function loadEvent(req, res, next) {
+  const { eventId } = req.params;
+  if (!EVENT_ID_RE.test(eventId)) return res.status(404).json({ error: 'Evento no encontrado' });
+  const ev = eventDirs(eventId);
+  if (!fs.existsSync(ev.dir)) return res.status(404).json({ error: 'Evento no encontrado' });
+  req.event = ev;
+  next();
+}
+
+function requireEventAdmin(req, res, next) {
+  if (isEventAdmin(req, req.event.id)) return next();
+  res.status(401).json({ error: 'No autorizado' });
+}
 
 // ---------- Subida de archivos ----------
 
@@ -118,7 +188,8 @@ const ALLOWED_MIME_EXT = {
 };
 
 const storage = multer.diskStorage({
-  destination: UPLOAD_DIR,
+  // loadEvent corre antes que multer, así que req.event ya está resuelto
+  destination: (req, file, cb) => cb(null, req.event.dir),
   filename: (req, file, cb) => {
     const ext = ALLOWED_MIME_EXT[file.mimetype];
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
@@ -147,20 +218,15 @@ function mediaType(filename) {
   return 'other';
 }
 
-function safeFilePath(name) {
-  // Evita path traversal: el archivo debe existir dentro de UPLOAD_DIR
-  const resolved = path.resolve(UPLOAD_DIR, name);
-  if (!resolved.startsWith(UPLOAD_DIR + path.sep)) return null;
+function safeFilePath(ev, name) {
+  // Evita path traversal: el archivo debe existir dentro del evento
+  const resolved = path.resolve(ev.dir, name);
+  if (!resolved.startsWith(ev.dir + path.sep)) return null;
   return resolved;
 }
 
-function requireAdmin(req, res, next) {
-  if (req.session.isAdmin) return next();
-  res.status(401).json({ error: 'No autorizado' });
-}
-
-function thumbPathFor(name) {
-  return path.join(THUMB_DIR, path.basename(name).replace(/\.[^.]+$/, '') + '.jpg');
+function thumbPathFor(ev, name) {
+  return path.join(ev.thumbs, path.basename(name).replace(/\.[^.]+$/, '') + '.jpg');
 }
 
 // ---------- Configuración y metadatos (sin base de datos: todo en JSON) ----------
@@ -177,53 +243,53 @@ function writeJson(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
-function readSettings() {
-  return readJson(SETTINGS_PATH, { eventDate: null, watermarkText: '' });
+function readSettings(ev) {
+  return readJson(ev.settingsPath, { eventDate: null, watermarkText: '', eventName: '' });
 }
 
-function writeSettings(settings) {
-  writeJson(SETTINGS_PATH, settings);
+function writeSettings(ev, settings) {
+  writeJson(ev.settingsPath, settings);
 }
 
-function readMediaMeta() {
-  return readJson(MEDIA_META_PATH, {});
+function readMediaMeta(ev) {
+  return readJson(ev.mediaMetaPath, {});
 }
 
-function writeMediaMeta(meta) {
-  writeJson(MEDIA_META_PATH, meta);
+function writeMediaMeta(ev, meta) {
+  writeJson(ev.mediaMetaPath, meta);
 }
 
 function canGuestDownload(name, meta) {
   return meta[name]?.downloadable === 'all';
 }
 
-function deleteMedia(name) {
-  const filePath = safeFilePath(name);
+function deleteMedia(ev, name) {
+  const filePath = safeFilePath(ev, name);
   if (!filePath || !fs.existsSync(filePath)) return false;
   fs.unlinkSync(filePath);
-  const thumb = thumbPathFor(name);
+  const thumb = thumbPathFor(ev, name);
   if (fs.existsSync(thumb)) fs.unlinkSync(thumb);
-  const wmThumb = path.join(WM_THUMB_DIR, path.basename(name));
+  const wmThumb = path.join(ev.wmThumbs, path.basename(name));
   if (fs.existsSync(wmThumb)) fs.unlinkSync(wmThumb);
-  const wmDisplay = path.join(WM_DISPLAY_DIR, path.basename(name));
+  const wmDisplay = path.join(ev.wmDisplay, path.basename(name));
   if (fs.existsSync(wmDisplay)) fs.unlinkSync(wmDisplay);
-  const meta = readMediaMeta();
+  const meta = readMediaMeta(ev);
   if (meta[name]) {
     delete meta[name];
-    writeMediaMeta(meta);
+    writeMediaMeta(ev, meta);
   }
   return true;
 }
 
 // Genera (o reutiliza de caché) una versión con marca de agua de texto.
-// La caché se invalida sola si settings.json es más reciente que el archivo cacheado.
-async function getWatermarked(sourcePath, cacheDir) {
+// La caché se invalida sola si el settings.json del evento es más reciente.
+async function getWatermarked(ev, sourcePath, cacheDir) {
   const cachedPath = path.join(cacheDir, path.basename(sourcePath));
-  const settingsMTime = fs.existsSync(SETTINGS_PATH) ? fs.statSync(SETTINGS_PATH).mtimeMs : 0;
+  const settingsMTime = fs.existsSync(ev.settingsPath) ? fs.statSync(ev.settingsPath).mtimeMs : 0;
   if (fs.existsSync(cachedPath) && fs.statSync(cachedPath).mtimeMs >= settingsMTime) {
     return cachedPath;
   }
-  const { watermarkText } = readSettings();
+  const { watermarkText } = readSettings(ev);
   const image = sharp(sourcePath);
   const { width, height } = await image.metadata();
   const fontSize = Math.max(12, Math.round((width || 800) * 0.032));
@@ -242,16 +308,16 @@ async function getWatermarked(sourcePath, cacheDir) {
 
 // Sirve `sourcePath` con marca de agua si aplica (imagen + texto configurado + no admin);
 // si algo falla al generarla, sirve el original para no romper la vista.
-// La misma URL sirve contenido distinto según la sesión (admin ve el original,
-// el invitado la versión con marca de agua): sin "no-store" el navegador podría
-// reutilizar en caché la versión de invitado al iniciar sesión como admin.
-async function sendMaybeWatermarked(req, res, sourcePath, cacheDir) {
-  const { watermarkText } = readSettings();
+// La misma URL sirve contenido distinto según la sesión (el admin del evento ve
+// el original, el invitado la versión con marca de agua): sin "no-store" el
+// navegador podría reutilizar en caché la versión de invitado tras el login.
+async function sendMaybeWatermarked(req, res, ev, sourcePath, cacheDir) {
+  const { watermarkText } = readSettings(ev);
   const isImage = mediaType(sourcePath) === 'image';
   res.setHeader('Cache-Control', 'no-store');
-  if (!req.session.isAdmin && isImage && watermarkText) {
+  if (!isEventAdmin(req, ev.id) && isImage && watermarkText) {
     try {
-      const wmPath = await getWatermarked(sourcePath, cacheDir);
+      const wmPath = await getWatermarked(ev, sourcePath, cacheDir);
       res.setHeader('Content-Disposition', 'inline');
       return res.sendFile(wmPath);
     } catch {
@@ -265,8 +331,8 @@ async function sendMaybeWatermarked(req, res, sourcePath, cacheDir) {
 // Rechaza subidas cuando el evento ya ocupa el máximo configurado
 function checkTotalSpace(req, res, next) {
   const total = fs
-    .readdirSync(UPLOAD_DIR)
-    .map((f) => path.join(UPLOAD_DIR, f))
+    .readdirSync(req.event.dir)
+    .map((f) => path.join(req.event.dir, f))
     .filter((p) => fs.statSync(p).isFile())
     .reduce((sum, p) => sum + fs.statSync(p).size, 0);
   if (total > MAX_TOTAL_GB * 1024 ** 3) {
@@ -277,11 +343,11 @@ function checkTotalSpace(req, res, next) {
 
 // Comprime una imagen recién subida y genera su miniatura.
 // Los videos se guardan tal cual (transcodificar requeriría ffmpeg).
-async function processUpload(file) {
+async function processUpload(ev, file) {
   let finalPath = file.path;
 
   if (file.mimetype.startsWith('image/')) {
-    const dst = path.join(UPLOAD_DIR, path.basename(file.path, path.extname(file.path)) + '.jpg');
+    const dst = path.join(ev.dir, path.basename(file.path, path.extname(file.path)) + '.jpg');
     const tmp = dst + '.tmp';
     try {
       await sharp(file.path)
@@ -306,7 +372,7 @@ async function processUpload(file) {
         .rotate()
         .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover' })
         .jpeg({ quality: 70 })
-        .toFile(thumbPathFor(finalPath));
+        .toFile(thumbPathFor(ev, finalPath));
     } catch {
       // sin miniatura la galería usa el archivo completo
     }
@@ -315,87 +381,51 @@ async function processUpload(file) {
   return path.basename(finalPath);
 }
 
-// ---------- API pública (invitados) ----------
+// ---------- Autenticación y registro ----------
 
-// Subir uno o varios archivos (las imágenes se comprimen al recibirlas)
-app.post('/api/upload', checkTotalSpace, upload.array('files', 20), async (req, res, next) => {
-  try {
-    const downloadable = req.body.downloadable === 'all' ? 'all' : 'admin';
-    const finalNames = await Promise.all(req.files.map(processUpload));
-    const meta = readMediaMeta();
-    for (const name of finalNames) meta[name] = { downloadable };
-    writeMediaMeta(meta);
-    res.json({ ok: true, count: req.files.length });
-  } catch (err) {
-    next(err);
+// Hash de una contraseña aleatoria: cuando el usuario no existe se compara
+// contra él igualmente, para que la respuesta tarde lo mismo que con un
+// usuario real (no filtra por temporización si un nombre existe o no).
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 12);
+
+// Crear cuenta + evento con un código de invitación de un solo uso
+app.post('/api/register', registerLimiter, async (req, res) => {
+  const { username, password, inviteCode } = req.body || {};
+  const user = String(username || '').trim().toLowerCase();
+  if (!USERNAME_RE.test(user)) {
+    return res.status(400).json({ error: 'Nombre de usuario no válido: 3-30 caracteres entre letras minúsculas, números y ". _ -"' });
   }
-});
-
-// Listar los archivos subidos
-app.get('/api/media', (req, res) => {
-  const meta = readMediaMeta();
-  // El contenido de /media y /thumbs depende de la sesión (admin ve el
-  // original, el invitado la versión con marca de agua) pero la ruta sería
-  // idéntica para los dos; algunos navegadores reutilizan igualmente una
-  // imagen ya vista para esa misma URL aunque el servidor mande "no-store".
-  // Con esta marca en la query, admin e invitado nunca comparten URL.
-  const roleTag = req.session.isAdmin ? 'a' : 'g';
-  const files = fs
-    .readdirSync(UPLOAD_DIR)
-    .filter((f) => mediaType(f) !== 'other')
-    .map((f) => {
-      const stat = fs.statSync(path.join(UPLOAD_DIR, f));
-      const hasThumb = fs.existsSync(thumbPathFor(f));
-      return {
-        id: f,
-        type: mediaType(f),
-        url: `/media/${f}?v=${roleTag}`,
-        thumb: hasThumb ? `/thumbs/${path.basename(thumbPathFor(f))}?v=${roleTag}` : null,
-        uploadedAt: stat.mtimeMs,
-        canDownload: req.session.isAdmin || canGuestDownload(f, meta),
-      };
-    })
-    .sort((a, b) => b.uploadedAt - a.uploadedAt);
-  res.json(files);
-});
-
-// Servir una miniatura (con marca de agua para invitados si está configurada)
-app.get('/thumbs/:name', async (req, res) => {
-  const resolved = path.resolve(THUMB_DIR, req.params.name);
-  if (!resolved.startsWith(THUMB_DIR + path.sep) || !fs.existsSync(resolved)) return res.status(404).end();
-  await sendMaybeWatermarked(req, res, resolved, WM_THUMB_DIR);
-});
-
-// Servir un archivo SOLO para visualización (inline, no como descarga;
-// con marca de agua para invitados si está configurada)
-app.get('/media/:name', async (req, res) => {
-  const filePath = safeFilePath(req.params.name);
-  if (!filePath || !fs.existsSync(filePath)) return res.status(404).end();
-  await sendMaybeWatermarked(req, res, filePath, WM_DISPLAY_DIR);
-});
-
-// Descargar un archivo si está permitido para todos (o si es el admin); siempre sin marca de agua
-app.get('/api/download/:name', (req, res) => {
-  const filePath = safeFilePath(req.params.name);
-  if (!filePath || !fs.existsSync(filePath)) return res.status(404).end();
-  const meta = readMediaMeta();
-  if (!req.session.isAdmin && !canGuestDownload(req.params.name, meta)) {
-    return res.status(403).json({ error: 'Descarga no permitida' });
+  if (typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
   }
-  res.download(filePath);
-});
+  const code = String(inviteCode || '').trim().toUpperCase();
+  const invites = readInvites();
+  if (!invites.includes(code)) {
+    return res.status(403).json({ error: 'Código de invitación no válido' });
+  }
+  const users = readUsers();
+  if (users[user]) {
+    return res.status(409).json({ error: 'Ese nombre de usuario ya existe' });
+  }
 
-// ---------- Autenticación admin ----------
+  const eventId = newEventId();
+  createEventDirs(eventDirs(eventId));
+  users[user] = { passwordHash: await bcrypt.hash(password, 12), eventId, createdAt: Date.now() };
+  writeUsers(users);
+  writeInvites(invites.filter((c) => c !== code)); // el código se consume
+  req.session.user = user;
+  res.json({ ok: true, eventId });
+});
 
 app.post('/api/login', loginLimiter, async (req, res) => {
-  const { email, password } = req.body || {};
-  const validEmail = typeof email === 'string' && email === ADMIN_EMAIL;
-  // bcrypt.compare siempre se ejecuta, aunque el email ya sea inválido,
-  // para no filtrar por temporización si el email existe o no.
-  const validPassword = typeof password === 'string' && (await bcrypt.compare(password, ADMIN_PASSWORD_HASH));
-  if (validEmail && validPassword) {
-    req.session.isAdmin = true;
-    return res.json({ ok: true });
+  const { username, password } = req.body || {};
+  const user = String(username || '').trim().toLowerCase();
+  const account = readUsers()[user];
+  const validPassword =
+    typeof password === 'string' && (await bcrypt.compare(password, account ? account.passwordHash : DUMMY_HASH));
+  if (account && validPassword) {
+    req.session.user = user;
+    return res.json({ ok: true, eventId: account.eventId });
   }
   res.status(401).json({ error: 'Credenciales incorrectas' });
 });
@@ -406,25 +436,117 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/me', (req, res) => {
-  res.json({ isAdmin: !!req.session.isAdmin });
+  const username = req.session.user || null;
+  const eventId = sessionEventId(req);
+  res.json({ user: eventId ? username : null, eventId });
 });
 
-// ---------- API admin ----------
+// ---------- Página y API pública del evento (invitados) ----------
+
+// La galería: la misma página para invitados y para el admin del evento
+app.get('/e/:eventId', (req, res) => {
+  const { eventId } = req.params;
+  if (!EVENT_ID_RE.test(eventId) || !fs.existsSync(path.join(UPLOAD_DIR, eventId))) {
+    return res
+      .status(404)
+      .send('<!doctype html><html lang="es"><meta charset="utf-8"><title>Evento no encontrado</title><body style="font-family:sans-serif;text-align:center;padding:3rem"><h1>Evento no encontrado</h1><p>Revisa el enlace o el código QR.</p><a href="/">Ir al inicio</a></body></html>');
+  }
+  res.sendFile(path.join(__dirname, 'public', 'event.html'));
+});
+
+// Nombre del evento (público: el hero de la galería lo muestra a los invitados)
+app.get('/api/e/:eventId/info', loadEvent, (req, res) => {
+  const { eventName } = readSettings(req.event);
+  res.json({ eventName: eventName || '' });
+});
+
+// Subir uno o varios archivos (las imágenes se comprimen al recibirlas)
+app.post('/api/e/:eventId/upload', loadEvent, checkTotalSpace, upload.array('files', 20), async (req, res, next) => {
+  try {
+    const downloadable = req.body.downloadable === 'all' ? 'all' : 'admin';
+    const finalNames = await Promise.all(req.files.map((f) => processUpload(req.event, f)));
+    const meta = readMediaMeta(req.event);
+    for (const name of finalNames) meta[name] = { downloadable };
+    writeMediaMeta(req.event, meta);
+    res.json({ ok: true, count: req.files.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Listar los archivos subidos
+app.get('/api/e/:eventId/media', loadEvent, (req, res) => {
+  const ev = req.event;
+  const meta = readMediaMeta(ev);
+  const admin = isEventAdmin(req, ev.id);
+  // El contenido de media y thumbs depende de la sesión (el admin ve el
+  // original, el invitado la versión con marca de agua) pero la ruta sería
+  // idéntica para los dos; algunos navegadores reutilizan igualmente una
+  // imagen ya vista para esa misma URL aunque el servidor mande "no-store".
+  // Con esta marca en la query, admin e invitado nunca comparten URL.
+  const roleTag = admin ? 'a' : 'g';
+  const files = fs
+    .readdirSync(ev.dir)
+    .filter((f) => mediaType(f) !== 'other')
+    .map((f) => {
+      const stat = fs.statSync(path.join(ev.dir, f));
+      const hasThumb = fs.existsSync(thumbPathFor(ev, f));
+      return {
+        id: f,
+        type: mediaType(f),
+        url: `/e/${ev.id}/media/${f}?v=${roleTag}`,
+        thumb: hasThumb ? `/e/${ev.id}/thumbs/${path.basename(thumbPathFor(ev, f))}?v=${roleTag}` : null,
+        uploadedAt: stat.mtimeMs,
+        canDownload: admin || canGuestDownload(f, meta),
+      };
+    })
+    .sort((a, b) => b.uploadedAt - a.uploadedAt);
+  res.json(files);
+});
+
+// Servir una miniatura (con marca de agua para invitados si está configurada)
+app.get('/e/:eventId/thumbs/:name', loadEvent, async (req, res) => {
+  const resolved = path.resolve(req.event.thumbs, req.params.name);
+  if (!resolved.startsWith(req.event.thumbs + path.sep) || !fs.existsSync(resolved)) return res.status(404).end();
+  await sendMaybeWatermarked(req, res, req.event, resolved, req.event.wmThumbs);
+});
+
+// Servir un archivo SOLO para visualización (inline, no como descarga;
+// con marca de agua para invitados si está configurada)
+app.get('/e/:eventId/media/:name', loadEvent, async (req, res) => {
+  const filePath = safeFilePath(req.event, req.params.name);
+  if (!filePath || !fs.existsSync(filePath)) return res.status(404).end();
+  await sendMaybeWatermarked(req, res, req.event, filePath, req.event.wmDisplay);
+});
+
+// Descargar un archivo si está permitido para todos (o si es el admin del evento); siempre sin marca de agua
+app.get('/api/e/:eventId/download/:name', loadEvent, (req, res) => {
+  const filePath = safeFilePath(req.event, req.params.name);
+  if (!filePath || !fs.existsSync(filePath)) return res.status(404).end();
+  const meta = readMediaMeta(req.event);
+  if (!isEventAdmin(req, req.event.id) && !canGuestDownload(req.params.name, meta)) {
+    return res.status(403).json({ error: 'Descarga no permitida' });
+  }
+  res.download(filePath);
+});
+
+// ---------- API admin del evento ----------
 
 // Descargar un archivo (attachment fuerza la descarga)
-app.get('/api/admin/download/:name', requireAdmin, (req, res) => {
-  const filePath = safeFilePath(req.params.name);
+app.get('/api/e/:eventId/admin/download/:name', loadEvent, requireEventAdmin, (req, res) => {
+  const filePath = safeFilePath(req.event, req.params.name);
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).end();
   res.download(filePath);
 });
 
 // Descargar varios archivos en un ZIP (?files=a.jpg,b.mp4), o toda la galería (?all=1)
-app.get('/api/admin/zip', requireAdmin, (req, res) => {
+app.get('/api/e/:eventId/admin/zip', loadEvent, requireEventAdmin, (req, res) => {
+  const ev = req.event;
   const names =
     req.query.all === '1'
-      ? fs.readdirSync(UPLOAD_DIR).filter((f) => mediaType(f) !== 'other')
+      ? fs.readdirSync(ev.dir).filter((f) => mediaType(f) !== 'other')
       : String(req.query.files || '').split(',').filter(Boolean);
-  const files = names.map(safeFilePath).filter((p) => p && fs.existsSync(p));
+  const files = names.map((n) => safeFilePath(ev, n)).filter((p) => p && fs.existsSync(p));
   if (!files.length) return res.status(400).json({ error: 'Sin archivos válidos' });
   res.attachment('pasame-la-foto.zip');
   const zip = archiver('zip', { zlib: { level: 1 } }); // fotos/videos ya vienen comprimidos
@@ -435,49 +557,50 @@ app.get('/api/admin/zip', requireAdmin, (req, res) => {
 });
 
 // Borrar varios archivos a la vez
-app.post('/api/admin/delete', requireAdmin, (req, res) => {
+app.post('/api/e/:eventId/admin/delete', loadEvent, requireEventAdmin, (req, res) => {
   const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
-  const deleted = ids.filter(deleteMedia).length;
+  const deleted = ids.filter((id) => deleteMedia(req.event, id)).length;
   res.json({ ok: true, deleted });
 });
 
 // Borrar un archivo
-app.delete('/api/admin/media/:name', requireAdmin, (req, res) => {
-  if (!deleteMedia(req.params.name)) return res.status(404).json({ error: 'No existe' });
+app.delete('/api/e/:eventId/admin/media/:name', loadEvent, requireEventAdmin, (req, res) => {
+  if (!deleteMedia(req.event, req.params.name)) return res.status(404).json({ error: 'No existe' });
   res.json({ ok: true });
 });
 
-// ---------- Ajustes del evento (fecha para la expiración, texto de marca de agua) ----------
+// ---------- Ajustes del evento (nombre, fecha para la expiración, marca de agua) ----------
 
-app.get('/api/admin/settings', requireAdmin, (req, res) => {
-  res.json(readSettings());
+app.get('/api/e/:eventId/admin/settings', loadEvent, requireEventAdmin, (req, res) => {
+  res.json(readSettings(req.event));
 });
 
-app.post('/api/admin/settings', requireAdmin, (req, res) => {
-  const { eventDate, watermarkText } = req.body || {};
+app.post('/api/e/:eventId/admin/settings', loadEvent, requireEventAdmin, (req, res) => {
+  const { eventDate, watermarkText, eventName } = req.body || {};
   if (eventDate && Number.isNaN(new Date(eventDate).getTime())) {
     return res.status(400).json({ error: 'Fecha de evento no válida' });
   }
-  const settings = readSettings();
+  const settings = readSettings(req.event);
   settings.eventDate = eventDate || null;
   settings.watermarkText = String(watermarkText || '').slice(0, 80);
-  writeSettings(settings);
+  settings.eventName = String(eventName || '').slice(0, 60);
+  writeSettings(req.event, settings);
   res.json({ ok: true });
 });
 
-// ---------- Código QR ----------
+// ---------- Código QR del evento ----------
 
-// PNG con el QR que apunta a la web (configurable con PUBLIC_URL en .env)
-app.get('/qr', async (req, res) => {
-  const base = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  const png = await QRCode.toBuffer(base, { width: 600, margin: 2 });
+// PNG con el QR que apunta a la galería del evento (la base se configura con PUBLIC_URL)
+app.get('/e/:eventId/qr', loadEvent, requireEventAdmin, async (req, res) => {
+  const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  const png = await QRCode.toBuffer(`${base}/e/${req.event.id}`, { width: 600, margin: 2 });
   res.type('png').send(png);
 });
 
-// ---------- Expiración automática del evento ----------
-// 30 días después de la fecha de evento fijada por el admin, se borra todo
-// el contenido subido. La fecha vuelve a null para poder reutilizar el
-// despliegue en un evento siguiente (la marca de agua se conserva).
+// ---------- Expiración automática de los eventos ----------
+// 30 días después de la fecha fijada por cada admin, se borra el contenido
+// subido a su evento. La fecha vuelve a null para poder reutilizar el portal
+// en un evento siguiente (la cuenta, el nombre y la marca de agua se conservan).
 
 function clearDir(dir) {
   for (const f of fs.readdirSync(dir)) {
@@ -487,19 +610,24 @@ function clearDir(dir) {
 }
 
 function checkExpiration() {
-  const settings = readSettings();
-  if (!settings.eventDate) return;
-  const expiresAt = new Date(settings.eventDate).getTime() + EXPIRATION_MS;
-  if (Date.now() < expiresAt) return;
+  const users = readUsers();
+  for (const { eventId } of Object.values(users)) {
+    const ev = eventDirs(eventId);
+    if (!fs.existsSync(ev.dir)) continue;
+    const settings = readSettings(ev);
+    if (!settings.eventDate) continue;
+    const expiresAt = new Date(settings.eventDate).getTime() + EXPIRATION_MS;
+    if (Date.now() < expiresAt) continue;
 
-  clearDir(UPLOAD_DIR);
-  clearDir(THUMB_DIR);
-  clearDir(WM_THUMB_DIR);
-  clearDir(WM_DISPLAY_DIR);
-  writeMediaMeta({});
-  settings.eventDate = null;
-  writeSettings(settings);
-  console.log('Evento expirado: se ha borrado todo el contenido subido.');
+    clearDir(ev.dir);
+    clearDir(ev.thumbs);
+    clearDir(ev.wmThumbs);
+    clearDir(ev.wmDisplay);
+    writeMediaMeta(ev, {});
+    settings.eventDate = null;
+    writeSettings(ev, settings);
+    console.log(`Evento ${eventId} expirado: se ha borrado todo el contenido subido.`);
+  }
 }
 
 checkExpiration();

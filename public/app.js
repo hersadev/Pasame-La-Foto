@@ -1,8 +1,14 @@
+// La galería vive en /e/<eventId>: el id sale de la URL y prefija todas las llamadas
+const EVENT_BASE = location.pathname.replace(/\/+$/, ''); // "/e/x7k2m9q4ab"
+const EVENT_ID = EVENT_BASE.split('/')[2];
+const API = `/api/e/${EVENT_ID}`;
+
 const state = { items: [], isAdmin: false, viewerIndex: -1, selected: new Set() };
 
 const gallery = document.getElementById('gallery');
 const emptyState = document.getElementById('emptyState');
 const stats = document.getElementById('stats');
+const heroTitle = document.getElementById('heroTitle');
 const fileInput = document.getElementById('fileInput');
 const progress = document.getElementById('progress');
 const progressBar = document.getElementById('progressBar');
@@ -21,14 +27,13 @@ const menuSettings = document.getElementById('menuSettings');
 const menuLogout = document.getElementById('menuLogout');
 const selectAllTop = document.getElementById('selectAllTop');
 const selectAllTopLabel = document.getElementById('selectAllTopLabel');
-const loginModal = document.getElementById('loginModal');
 const qrModal = document.getElementById('qrModal');
 const qrImage = document.getElementById('qrImage');
-const loginForm = document.getElementById('loginForm');
-const loginError = document.getElementById('loginError');
+const qrDownload = document.getElementById('qrDownload');
 
 const settingsModal = document.getElementById('settingsModal');
 const settingsForm = document.getElementById('settingsForm');
+const eventNameInput = document.getElementById('eventName');
 const eventDateInput = document.getElementById('eventDate');
 const watermarkTextInput = document.getElementById('watermarkText');
 
@@ -63,10 +68,13 @@ function toast(msg, isError = false) {
 }
 
 // ---------- Sesión ----------
+// El login vive en la portada (/): el candado lleva allí. Es admin de esta
+// galería quien tiene sesión iniciada y su evento coincide con el de la URL.
 
 async function refreshSession() {
   const res = await fetch('/api/me');
-  const { isAdmin } = await res.json();
+  const me = await res.json();
+  const isAdmin = !!me.user && me.eventId === EVENT_ID;
   state.isAdmin = isAdmin;
   document.body.classList.toggle('is-admin', isAdmin);
   loginBtn.hidden = isAdmin;
@@ -76,32 +84,19 @@ async function refreshSession() {
   updateSelectionBar();
 }
 
-loginBtn.addEventListener('click', () => {
-  loginError.textContent = '';
-  loginModal.hidden = false;
-});
+// ---------- Nombre del evento ----------
 
-loginForm.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  loginError.textContent = '';
-  const res = await fetch('/api/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email: document.getElementById('email').value,
-      password: document.getElementById('password').value,
-    }),
-  });
-  if (res.ok) {
-    loginModal.hidden = true;
-    loginForm.reset();
-    await refreshSession();
-    await loadGallery(); // re-pide /api/media: las URLs de fotos cambian según el rol
-    toast('Sesión de administrador iniciada');
+async function loadEventInfo() {
+  const res = await fetch(`${API}/info`);
+  const { eventName } = await res.json();
+  if (eventName) {
+    heroTitle.textContent = eventName;
+    document.title = eventName;
   } else {
-    loginError.textContent = 'Credenciales incorrectas';
+    heroTitle.textContent = 'Comparte el momento';
+    document.title = 'Pásame la foto';
   }
-});
+}
 
 // ---------- Menú de administrador ----------
 // Desplegable anclado al botón "más opciones" (no un modal): se abre hacia
@@ -123,19 +118,21 @@ document.addEventListener('keydown', (e) => {
 
 menuQr.addEventListener('click', () => {
   adminMenu.hidden = true;
-  qrImage.src = '/qr';
+  qrImage.src = `${EVENT_BASE}/qr`;
+  qrDownload.href = `${EVENT_BASE}/qr`;
   qrModal.hidden = false;
 });
 
 menuZipAll.addEventListener('click', () => {
   adminMenu.hidden = true;
-  window.location.href = '/api/admin/zip?all=1';
+  window.location.href = `${API}/admin/zip?all=1`;
 });
 
 menuSettings.addEventListener('click', async () => {
   adminMenu.hidden = true;
-  const res = await fetch('/api/admin/settings');
+  const res = await fetch(`${API}/admin/settings`);
   const settings = await res.json();
+  eventNameInput.value = settings.eventName || '';
   eventDateInput.value = settings.eventDate || '';
   watermarkTextInput.value = settings.watermarkText || '';
   settingsModal.hidden = false;
@@ -143,10 +140,11 @@ menuSettings.addEventListener('click', async () => {
 
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const res = await fetch('/api/admin/settings', {
+  const res = await fetch(`${API}/admin/settings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      eventName: eventNameInput.value,
       eventDate: eventDateInput.value || null,
       watermarkText: watermarkTextInput.value,
     }),
@@ -154,6 +152,7 @@ settingsForm.addEventListener('submit', async (e) => {
   if (res.ok) {
     settingsModal.hidden = true;
     toast('Ajustes guardados');
+    loadEventInfo(); // el título de la galería puede haber cambiado
   } else {
     toast('No se pudieron guardar los ajustes', true);
   }
@@ -163,12 +162,12 @@ menuLogout.addEventListener('click', async () => {
   adminMenu.hidden = true;
   await fetch('/api/logout', { method: 'POST' });
   await refreshSession();
-  await loadGallery(); // re-pide /api/media: las URLs de fotos cambian según el rol
+  await loadGallery(); // re-pide la lista: las URLs de fotos cambian según el rol
   toast('Sesión cerrada');
 });
 
 // Cerrar modales tocando el fondo
-for (const modal of [loginModal, qrModal, settingsModal]) {
+for (const modal of [qrModal, settingsModal]) {
   modal.querySelector('[data-close]').addEventListener('click', () => (modal.hidden = true));
 }
 
@@ -248,14 +247,14 @@ selectAllTop.addEventListener('click', toggleSelectAll);
 document.getElementById('selDownload').addEventListener('click', () => {
   if (!state.selected.size) return toast('No hay nada seleccionado', true);
   const files = [...state.selected].map(encodeURIComponent).join(',');
-  window.location.href = `/api/admin/zip?files=${files}`;
+  window.location.href = `${API}/admin/zip?files=${files}`;
 });
 
 document.getElementById('selDelete').addEventListener('click', async () => {
   const n = state.selected.size;
   if (!n) return toast('No hay nada seleccionado', true);
   if (!(await confirmDialog(`Se borrarán ${n} archivo(s) definitivamente.`))) return;
-  const res = await fetch('/api/admin/delete', {
+  const res = await fetch(`${API}/admin/delete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ids: [...state.selected] }),
@@ -335,7 +334,7 @@ uploadPermOk.addEventListener('click', async () => {
   progressText.textContent = 'Subiendo…';
 
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/upload');
+  xhr.open('POST', `${API}/upload`);
   xhr.upload.onprogress = (e) => {
     if (!e.lengthComputable) return;
     const pct = Math.round((e.loaded / e.total) * 100);
@@ -365,7 +364,7 @@ uploadPermOk.addEventListener('click', async () => {
 // ---------- Galería ----------
 
 async function loadGallery() {
-  const res = await fetch('/api/media');
+  const res = await fetch(`${API}/media`);
   state.items = await res.json();
   renderGallery();
 }
@@ -412,7 +411,7 @@ function renderGallery() {
 
       const downloadLink = document.createElement('a');
       downloadLink.className = 'tile-btn';
-      downloadLink.href = `/api/admin/download/${encodeURIComponent(item.id)}`;
+      downloadLink.href = `${API}/admin/download/${encodeURIComponent(item.id)}`;
       downloadLink.title = 'Descargar';
       downloadLink.textContent = '⬇';
       downloadLink.addEventListener('click', (e) => e.stopPropagation());
@@ -448,7 +447,7 @@ function renderGallery() {
 
       const downloadLink = document.createElement('a');
       downloadLink.className = 'tile-btn';
-      downloadLink.href = `/api/download/${encodeURIComponent(item.id)}`;
+      downloadLink.href = `${API}/download/${encodeURIComponent(item.id)}`;
       downloadLink.title = 'Descargar';
       downloadLink.textContent = '⬇';
       downloadLink.addEventListener('click', (e) => e.stopPropagation());
@@ -464,7 +463,7 @@ function renderGallery() {
 
 async function deleteItem(item) {
   if (!(await confirmDialog('Este archivo se borrará definitivamente.'))) return;
-  const res = await fetch(`/api/admin/media/${item.id}`, { method: 'DELETE' });
+  const res = await fetch(`${API}/admin/media/${item.id}`, { method: 'DELETE' });
   if (res.ok) {
     toast('Archivo borrado');
     if (!viewer.hidden) closeViewer();
@@ -505,7 +504,9 @@ function renderViewer() {
 
   viewerActions.hidden = !state.isAdmin && !item.canDownload;
   viewerDelete.hidden = !state.isAdmin;
-  viewerDownload.href = state.isAdmin ? `/api/admin/download/${item.id}` : `/api/download/${item.id}`;
+  viewerDownload.href = state.isAdmin
+    ? `${API}/admin/download/${item.id}`
+    : `${API}/download/${item.id}`;
 }
 
 function closeViewer() {
@@ -552,5 +553,5 @@ viewer.addEventListener('touchend', (e) => {
 
 (async function init() {
   await refreshSession();
-  await loadGallery();
+  await Promise.all([loadEventInfo(), loadGallery()]);
 })();

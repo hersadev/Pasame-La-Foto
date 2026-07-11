@@ -912,3 +912,102 @@ body.selecting .fab {
 .btn-glass-danger {
   background: rgba(192, 86, 79, 0.55);
 }
+
+/* ============ Landing (login y registro) ============ */
+
+/* Sin botón flotante en la landing: fuera el hueco que reserva el body */
+body.landing-body {
+  padding-bottom: 0;
+}
+
+.landing {
+  position: relative;
+  overflow: hidden;
+  /* Anula el max-width que el CSS base da a <main>: el recorte de los blobs
+     decorativos debe caer en el borde real de la pantalla, no en la columna
+     centrada de 1100px (dejaba los círculos cortados en mitad del fondo) */
+  max-width: none;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.2rem calc(2rem + env(safe-area-inset-bottom));
+}
+
+.landing-blob-2 {
+  position: absolute;
+  bottom: -70px;
+  right: -70px;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  z-index: -1;
+  filter: blur(2px);
+}
+
+.landing-brand {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(2rem, 9vw, 3rem);
+  text-align: center;
+}
+
+.landing-sub {
+  color: var(--muted);
+  text-align: center;
+  margin: 0.5rem 0 1.8rem;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: color-mix(in srgb, #fff 45%, var(--bg));
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  padding: 1.9rem 1.6rem;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+}
+
+.auth-card h2 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 1.4rem;
+  text-align: center;
+  margin-bottom: 1.3rem;
+}
+
+.auth-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.auth-card input {
+  padding: 0.9rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-family: var(--sans);
+  font-size: 1rem;
+}
+
+.auth-card input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.link-btn {
+  display: block;
+  width: 100%;
+  margin-top: 1.1rem;
+  border: none;
+  background: none;
+  color: var(--accent-dark);
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-align: center;
+  cursor: pointer;
+}
