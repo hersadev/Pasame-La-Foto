@@ -1,13 +1,13 @@
 # 📸 Pásame la foto
 
-Galería colaborativa de fotos y videos para eventos, multiportal. Cada organizador (una boda, un cumpleaños…) crea su propio portal con un código de invitación: tiene su galería, su panel de administración y su código QR. Los invitados escanean el QR, suben sus recuerdos desde el móvil y ven al momento lo que comparten los demás. Sin apps y sin base de datos.
+Galería colaborativa de fotos para eventos, multiportal. Cada organizador (una boda, un cumpleaños…) crea su propio portal con un código de invitación: tiene su galería, su panel de administración y su código QR. Los invitados escanean el QR, suben sus recuerdos desde el móvil y ven al momento lo que comparten los demás. Sin apps y sin base de datos.
 
 ## ✨ Características
 
 - 🏠 **Un portal por evento**: cada cuenta tiene su propia galería aislada en una URL aleatoria no adivinable (`/e/x7k2m9q4ab`).
 - 🎟️ **Registro con código de invitación**: solo crea portal quien tenga un código generado por el dueño del servidor (`npm run invitacion`).
 - 📱 **Pensada para el móvil**: el invitado escanea el QR, pulsa "Añadir fotos" y listo. Sin registro para invitados.
-- 🖼️ **Galería en vivo** con miniaturas ligeras y visor a pantalla completa (fotos y videos).
+- 🖼️ **Galería en vivo** con miniaturas ligeras y visor a pantalla completa.
 - 🗜️ **Compresión automática** de las fotos al subirlas (redimensionado + JPEG optimizado con sharp) y miniaturas de 480 px para que la galería cargue rápido.
 - 🔒 **Panel de administración** en la propia galería: descarga individual o en ZIP, borrado múltiple, marca de agua, nombre del evento y expiración automática.
 - 📷 **QR por evento** autogenerado (`/e/<id>/qr`), listo para imprimir y poner en las mesas.
@@ -53,13 +53,12 @@ La web queda en `http://localhost:3000`. Con el código de invitación, cada org
 
 - **Dueño del servidor**: genera códigos de invitación con `npm run invitacion` (cada código vale para un solo registro) y se los pasa a los organizadores.
 - **Organizador (admin de su evento)**: entra en la portada, crea su portal con el código de invitación y accede con su usuario y contraseña. En su galería tiene el menú de administración: código QR, descarga en ZIP, borrado múltiple y ajustes (nombre del evento, fecha y marca de agua). El candado de su galería lleva de vuelta al login.
-- **Invitados**: entran por el QR, suben fotos y videos y ven la galería de ese evento. No necesitan cuenta y no tienen botón de descarga (salvo en archivos marcados como descargables para todos).
+- **Invitados**: entran por el QR, suben fotos y ven la galería de ese evento. No necesitan cuenta y no tienen botón de descarga (salvo en archivos marcados como descargables para todos).
 
 ## 🛠️ Cómo funciona por dentro
 
 - **Cada evento es una carpeta**: `uploads/<eventId>/` guarda los archivos subidos, sus miniaturas (`.thumbs/`), las cachés de marca de agua (`.wm-thumbs/`, `.wm-display/`) y sus metadatos (`.data/settings.json`, `.data/media-meta.json`). Las cuentas viven en `uploads/.data/users.json` y los códigos de invitación pendientes en `uploads/.data/invites.json`.
 - Las **fotos se comprimen al recibirse**: se redimensionan a `IMAGE_MAX_SIDE` px y se recomprimen a JPEG. Si la versión comprimida no es más pequeña que la original, se conserva la original. La galería carga las miniaturas; el archivo completo solo se sirve al abrir el visor.
-- Los **videos no se transcodifican** (requeriría ffmpeg y mucha CPU); los móviles ya los comprimen bastante. Se limitan por tamaño con `MAX_FILE_MB`.
 - La **expiración es por evento**: 30 días después de la fecha que fije cada admin, su contenido se borra automáticamente. La cuenta, el nombre y la marca de agua se conservan para poder reutilizar el portal.
 - El "no poder descargar" de los invitados es **disuasorio** (sin botón de descarga, clic derecho bloqueado, `Content-Disposition: inline`). Quien puede ver un archivo en el navegador siempre puede acabar guardándolo.
 
@@ -82,6 +81,5 @@ Node.js + Express, con multer (subidas), sharp (compresión y miniaturas), bcryp
 ## 🗺️ Pendiente
 
 - Cambio y recuperación de contraseña.
-- Transcodificación de video con ffmpeg y miniaturas de video.
 - Paginación de la galería para eventos grandes.
 - Nombre del invitado al subir.

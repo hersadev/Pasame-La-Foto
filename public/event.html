@@ -47,7 +47,7 @@
   <section class="hero">
     <div class="hero-blob" aria-hidden="true"></div>
     <h1 id="heroTitle">Comparte el momento</h1>
-    <p class="hero-sub">Sube tus fotos y videos de este evento</p>
+    <p class="hero-sub">Sube tus fotos de este evento</p>
     <p id="stats" class="hero-stats"></p>
   </section>
 
@@ -70,7 +70,7 @@
     <svg viewBox="0 0 24 24"><path d="M12 5a1 1 0 0 1 1 1v5h5a1 1 0 1 1 0 2h-5v5a1 1 0 1 1-2 0v-5H6a1 1 0 1 1 0-2h5V6a1 1 0 0 1 1-1z"/></svg>
     Añadir fotos
   </label>
-  <input type="file" id="fileInput" accept="image/*,video/*" multiple hidden />
+  <input type="file" id="fileInput" accept="image/*" multiple hidden />
 
   <!-- Barra de selección múltiple (admin) -->
   <div id="selectionBar" class="selection-bar" hidden>
@@ -111,7 +111,7 @@
         <p class="field-hint">Se muestra como título de la galería.</p>
         <label class="field-label" for="eventDate">Fecha del evento</label>
         <input type="date" id="eventDate" />
-        <p class="field-hint">Las fotos y videos se borrarán automáticamente 30 días después.</p>
+        <p class="field-hint">Las fotos se borrarán automáticamente 30 días después.</p>
         <label class="field-label" for="watermarkText">Marca de agua (texto)</label>
         <input type="text" id="watermarkText" placeholder="Ej. Boda de Ana &amp; Luis" maxlength="60" />
         <p class="field-hint">Se muestra solo a los invitados al ver fotos. Déjalo vacío para no mostrar ninguna.</p>

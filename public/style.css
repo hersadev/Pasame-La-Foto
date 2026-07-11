@@ -257,8 +257,7 @@ main {
   }
 }
 
-.tile img,
-.tile video {
+.tile img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -268,40 +267,19 @@ main {
 }
 
 /* El admin sí interactúa con las imágenes (click derecho → guardar) */
-body.is-admin .tile img,
-body.is-admin .tile video {
+body.is-admin .tile img {
   pointer-events: auto;
 }
 
 /* Hover sutil solo en dispositivos con puntero (no en táctiles) */
 @media (hover: hover) {
-  .tile img,
-  .tile video {
+  .tile img {
     transition: transform 0.35s ease, filter 0.35s ease;
   }
 
-  .tile:hover img,
-  .tile:hover video {
+  .tile:hover img {
     transform: scale(1.045);
   }
-}
-
-.play-badge {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 2.4rem;
-  height: 2.4rem;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(4px);
-  color: #fff;
-  font-size: 0.85rem;
-  padding-left: 3px;
-  pointer-events: none;
 }
 
 /* Acciones de admin sobre cada foto */
@@ -367,8 +345,7 @@ body.is-admin .tile video {
   color: #fff;
 }
 
-.tile.selected img,
-.tile.selected video {
+.tile.selected img {
   opacity: 0.75;
 }
 
@@ -834,8 +811,7 @@ body.selecting .fab {
   justify-content: center;
 }
 
-.viewer-content img,
-.viewer-content video {
+.viewer-content img {
   max-width: 92vw;
   max-height: 80dvh;
   object-fit: contain;

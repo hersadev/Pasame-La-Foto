@@ -376,34 +376,17 @@ function renderGallery() {
   emptyState.hidden = items.length > 0;
   updateSelectAllTop();
 
-  const photos = items.filter((i) => i.type === 'image').length;
-  const videos = items.length - photos;
-  stats.textContent = items.length
-    ? [photos && `${photos} foto${photos > 1 ? 's' : ''}`, videos && `${videos} video${videos > 1 ? 's' : ''}`]
-        .filter(Boolean)
-        .join(' · ')
-    : '';
+  stats.textContent = items.length ? `${items.length} foto${items.length > 1 ? 's' : ''}` : '';
 
   items.forEach((item, index) => {
     const tile = document.createElement('div');
     tile.className = 'tile';
     tile.style.animationDelay = `${Math.min(index * 30, 400)}ms`;
 
-    if (item.type === 'image') {
-      const img = document.createElement('img');
-      img.src = item.thumb || item.url; // miniatura ligera; el original solo en el visor
-      img.loading = 'lazy';
-      tile.appendChild(img);
-    } else {
-      // preload=none: con muchos videos la galería no descarga nada hasta abrirlos
-      const video = document.createElement('video');
-      video.src = item.url;
-      video.muted = true;
-      video.preload = 'none';
-      video.disablePictureInPicture = true;
-      tile.appendChild(video);
-      tile.insertAdjacentHTML('beforeend', '<span class="play-badge">▶</span>');
-    }
+    const img = document.createElement('img');
+    img.src = item.thumb || item.url; // miniatura ligera; el original solo en el visor
+    img.loading = 'lazy';
+    tile.appendChild(img);
 
     if (state.isAdmin) {
       const actions = document.createElement('div');
@@ -487,20 +470,9 @@ function renderViewer() {
   if (!item) return closeViewer();
 
   viewerContent.innerHTML = '';
-  if (item.type === 'image') {
-    const img = document.createElement('img');
-    img.src = item.url;
-    viewerContent.appendChild(img);
-  } else {
-    const video = document.createElement('video');
-    video.src = item.url;
-    video.controls = true;
-    video.autoplay = true;
-    video.playsInline = true;
-    video.setAttribute('controlsList', 'nodownload');
-    video.disablePictureInPicture = true;
-    viewerContent.appendChild(video);
-  }
+  const img = document.createElement('img');
+  img.src = item.url;
+  viewerContent.appendChild(img);
 
   viewerActions.hidden = !state.isAdmin && !item.canDownload;
   viewerDelete.hidden = !state.isAdmin;
@@ -524,7 +496,7 @@ function viewerStep(delta) {
 
 document.getElementById('viewerClose').addEventListener('click', closeViewer);
 
-// Cerrar pinchando fuera de la foto/video (comportamiento de modal)
+// Cerrar pinchando fuera de la foto (comportamiento de modal)
 viewer.addEventListener('click', (e) => {
   if (e.target === viewer || e.target === viewerContent) closeViewer();
 });

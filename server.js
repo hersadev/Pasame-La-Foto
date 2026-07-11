@@ -34,7 +34,8 @@ if (!SESSION_SECRET) {
 
 // Límites y compresión (configurables en .env)
 const MAX_FILE_MB = parseInt(process.env.MAX_FILE_MB || '100', 10); // por archivo
-const MAX_TOTAL_GB = parseFloat(process.env.MAX_TOTAL_GB || '20'); // total por evento
+const MAX_TOTAL_GB = parseFloat(process.env.MAX_TOTAL_GB || '5'); // total por evento
+const MAX_GLOBAL_GB = parseFloat(process.env.MAX_GLOBAL_GB || '15'); // total de todos los eventos (disco compartido)
 const IMAGE_MAX_SIDE = parseInt(process.env.IMAGE_MAX_SIDE || '2560', 10); // lado mayor tras comprimir
 const IMAGE_QUALITY = parseInt(process.env.IMAGE_QUALITY || '82', 10); // calidad JPEG
 const THUMB_SIZE = 480; // miniaturas de la galería
@@ -179,12 +180,6 @@ const ALLOWED_MIME_EXT = {
   'image/heic': '.heic',
   'image/heif': '.heic',
   'image/avif': '.avif',
-  'video/mp4': '.mp4',
-  'video/quicktime': '.mov',
-  'video/webm': '.webm',
-  'video/x-matroska': '.mkv',
-  'video/x-msvideo': '.avi',
-  'video/3gpp': '.3gp',
 };
 
 const storage = multer.diskStorage({
@@ -202,19 +197,17 @@ const upload = multer({
   limits: { fileSize: MAX_FILE_MB * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (ALLOWED_MIME_EXT[file.mimetype]) cb(null, true);
-    else cb(new Error('Solo se permiten fotos y videos en formatos admitidos'));
+    else cb(new Error('Solo se permiten fotos en formatos admitidos'));
   },
 });
 
 // ---------- Helpers ----------
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.avif']);
-const VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi', '.3gp']);
 
 function mediaType(filename) {
   const ext = path.extname(filename).toLowerCase();
   if (IMAGE_EXTS.has(ext)) return 'image';
-  if (VIDEO_EXTS.has(ext)) return 'video';
   return 'other';
 }
 
@@ -328,21 +321,56 @@ async function sendMaybeWatermarked(req, res, ev, sourcePath, cacheDir) {
   res.sendFile(sourcePath);
 }
 
-// Rechaza subidas cuando el evento ya ocupa el máximo configurado
+// Tamaño total (bytes) de un directorio, incluyendo subcarpetas: aparte de las
+// fotos, cada evento guarda miniaturas y cachés de marca de agua que también
+// ocupan disco y deben contar para la cuota.
+function dirSize(dir) {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += dirSize(p);
+    else if (entry.isFile()) {
+      try {
+        total += fs.statSync(p).size;
+      } catch {
+        // el archivo puede desaparecer mientras recorremos; se ignora
+      }
+    }
+  }
+  return total;
+}
+
+// Espacio ocupado por todos los eventos juntos (bytes)
+function totalUploadsSize() {
+  let total = 0;
+  for (const entry of fs.readdirSync(UPLOAD_DIR, { withFileTypes: true })) {
+    if (entry.isDirectory()) total += dirSize(path.join(UPLOAD_DIR, entry.name));
+  }
+  return total;
+}
+
+// Rechaza subidas cuando el evento (cuota individual) o el conjunto del servidor
+// (disco compartido) ya no tienen sitio. Se suma el Content-Length como cota
+// superior de lo que llega para frenar antes de escribir nada en disco; multer
+// impone además el límite real por archivo, así que un Content-Length falseado
+// no permite saltarse la cuota más allá de una petición.
 function checkTotalSpace(req, res, next) {
-  const total = fs
-    .readdirSync(req.event.dir)
-    .map((f) => path.join(req.event.dir, f))
-    .filter((p) => fs.statSync(p).isFile())
-    .reduce((sum, p) => sum + fs.statSync(p).size, 0);
-  if (total > MAX_TOTAL_GB * 1024 ** 3) {
+  const incoming = parseInt(req.headers['content-length'], 10) || 0;
+
+  const eventUsed = dirSize(req.event.dir);
+  if (eventUsed + incoming > MAX_TOTAL_GB * 1024 ** 3) {
     return res.status(507).json({ error: 'Se ha alcanzado el espacio máximo del evento' });
   }
+
+  const globalUsed = totalUploadsSize();
+  if (globalUsed + incoming > MAX_GLOBAL_GB * 1024 ** 3) {
+    return res.status(507).json({ error: 'El almacenamiento del servidor está lleno por ahora, inténtalo más tarde' });
+  }
+
   next();
 }
 
 // Comprime una imagen recién subida y genera su miniatura.
-// Los videos se guardan tal cual (transcodificar requeriría ffmpeg).
 async function processUpload(ev, file) {
   let finalPath = file.path;
 
@@ -399,6 +427,23 @@ app.post('/api/register', registerLimiter, async (req, res) => {
     return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
   }
   const code = String(inviteCode || '').trim().toUpperCase();
+
+  // Pre-chequeo para no gastar el hash con datos inválidos. No es autoritativo:
+  // se vuelve a validar dentro de la sección crítica de abajo.
+  if (!readInvites().includes(code)) {
+    return res.status(403).json({ error: 'Código de invitación no válido' });
+  }
+  if (readUsers()[user]) {
+    return res.status(409).json({ error: 'Ese nombre de usuario ya existe' });
+  }
+
+  // El hash es la única operación asíncrona; se hace ANTES de tocar los
+  // ficheros. Así el bloque leer-comprobar-consumir de abajo no tiene ningún
+  // `await` entre medias y, en el bucle de eventos de un solo hilo de Node,
+  // se ejecuta atómicamente: dos registros concurrentes con el mismo código
+  // no pueden intercalarse ni canjearlo dos veces.
+  const passwordHash = await bcrypt.hash(password, 12);
+
   const invites = readInvites();
   if (!invites.includes(code)) {
     return res.status(403).json({ error: 'Código de invitación no válido' });
@@ -410,7 +455,7 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 
   const eventId = newEventId();
   createEventDirs(eventDirs(eventId));
-  users[user] = { passwordHash: await bcrypt.hash(password, 12), eventId, createdAt: Date.now() };
+  users[user] = { passwordHash, eventId, createdAt: Date.now() };
   writeUsers(users);
   writeInvites(invites.filter((c) => c !== code)); // el código se consume
   req.session.user = user;
@@ -539,7 +584,7 @@ app.get('/api/e/:eventId/admin/download/:name', loadEvent, requireEventAdmin, (r
   res.download(filePath);
 });
 
-// Descargar varios archivos en un ZIP (?files=a.jpg,b.mp4), o toda la galería (?all=1)
+// Descargar varias fotos en un ZIP (?files=a.jpg,b.jpg), o toda la galería (?all=1)
 app.get('/api/e/:eventId/admin/zip', loadEvent, requireEventAdmin, (req, res) => {
   const ev = req.event;
   const names =
@@ -549,7 +594,7 @@ app.get('/api/e/:eventId/admin/zip', loadEvent, requireEventAdmin, (req, res) =>
   const files = names.map((n) => safeFilePath(ev, n)).filter((p) => p && fs.existsSync(p));
   if (!files.length) return res.status(400).json({ error: 'Sin archivos válidos' });
   res.attachment('pasame-la-foto.zip');
-  const zip = archiver('zip', { zlib: { level: 1 } }); // fotos/videos ya vienen comprimidos
+  const zip = archiver('zip', { zlib: { level: 1 } }); // las fotos ya vienen comprimidas
   zip.on('error', (err) => res.destroy(err));
   zip.pipe(res);
   for (const f of files) zip.file(f, { name: path.basename(f) });
