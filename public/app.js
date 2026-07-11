@@ -296,29 +296,32 @@ async function compressImage(file) {
 
 // ---------- Subida con progreso ----------
 
-let pendingFiles = null;
+let pendingDownloadable = null;
 
-fileInput.addEventListener('change', () => {
-  if (!fileInput.files.length) return;
-  pendingFiles = [...fileInput.files];
+document.getElementById('addPhotosBtn').addEventListener('click', () => {
   uploadPermModal.querySelector('input[value="all"]').checked = true;
   uploadPermModal.hidden = false;
 });
 
 uploadPermCancel.addEventListener('click', () => {
   uploadPermModal.hidden = true;
-  pendingFiles = null;
+  pendingDownloadable = null;
   fileInput.value = '';
 });
 
 uploadPermModal.querySelector('[data-close]').addEventListener('click', () => uploadPermCancel.click());
 
-uploadPermOk.addEventListener('click', async () => {
-  const downloadable = uploadPermModal.querySelector('input[name="downloadable"]:checked').value;
-  const files = pendingFiles;
+uploadPermOk.addEventListener('click', () => {
+  pendingDownloadable = uploadPermModal.querySelector('input[name="downloadable"]:checked').value;
   uploadPermModal.hidden = true;
-  pendingFiles = null;
-  if (!files || !files.length) return;
+  fileInput.click();
+});
+
+fileInput.addEventListener('change', async () => {
+  if (!fileInput.files.length) return;
+  const files = [...fileInput.files];
+  const downloadable = pendingDownloadable || 'all';
+  pendingDownloadable = null;
 
   const total = files.length;
   progress.hidden = false;
