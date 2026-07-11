@@ -39,6 +39,8 @@ body {
 
 button {
   font-family: inherit;
+  border: none;
+  background: none;
 }
 
 /* ============ Barra superior ============ */
