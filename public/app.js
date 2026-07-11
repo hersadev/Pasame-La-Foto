@@ -13,8 +13,12 @@ const selectionBar = document.getElementById('selectionBar');
 const selectionCount = document.getElementById('selectionCount');
 
 const loginBtn = document.getElementById('loginBtn');
-const logoutBtn = document.getElementById('logoutBtn');
-const qrBtn = document.getElementById('qrBtn');
+const adminMenuBtn = document.getElementById('adminMenuBtn');
+const adminMenu = document.getElementById('adminMenu');
+const menuSelectAll = document.getElementById('menuSelectAll');
+const menuSelectAllLabel = document.getElementById('menuSelectAllLabel');
+const menuQr = document.getElementById('menuQr');
+const menuLogout = document.getElementById('menuLogout');
 const loginModal = document.getElementById('loginModal');
 const qrModal = document.getElementById('qrModal');
 const qrImage = document.getElementById('qrImage');
@@ -55,8 +59,7 @@ async function refreshSession() {
   state.isAdmin = isAdmin;
   document.body.classList.toggle('is-admin', isAdmin);
   loginBtn.hidden = isAdmin;
-  logoutBtn.hidden = !isAdmin;
-  qrBtn.hidden = !isAdmin;
+  adminMenuBtn.hidden = !isAdmin;
   if (!isAdmin) state.selected.clear();
   updateSelectionBar();
 }
@@ -88,20 +91,38 @@ loginForm.addEventListener('submit', async (e) => {
   }
 });
 
-logoutBtn.addEventListener('click', async () => {
+// ---------- Menú de administrador ----------
+// Un único botón "más opciones" agrupa las acciones de admin: los iconos
+// sueltos (QR, seleccionar todo, cerrar sesión) resultaban poco intuitivos
+// sin una etiqueta de texto que explicara qué hacía cada uno.
+
+adminMenuBtn.addEventListener('click', () => {
+  const allSelected = state.items.length > 0 && state.selected.size === state.items.length;
+  menuSelectAllLabel.textContent = allSelected ? 'Deseleccionar todo' : 'Seleccionar todo';
+  adminMenu.hidden = false;
+});
+
+menuSelectAll.addEventListener('click', () => {
+  adminMenu.hidden = true;
+  toggleSelectAll();
+});
+
+menuQr.addEventListener('click', () => {
+  adminMenu.hidden = true;
+  qrImage.src = '/qr';
+  qrModal.hidden = false;
+});
+
+menuLogout.addEventListener('click', async () => {
+  adminMenu.hidden = true;
   await fetch('/api/logout', { method: 'POST' });
   await refreshSession();
   renderGallery();
   toast('Sesión cerrada');
 });
 
-qrBtn.addEventListener('click', () => {
-  qrImage.src = '/qr';
-  qrModal.hidden = false;
-});
-
 // Cerrar modales tocando el fondo
-for (const modal of [loginModal, qrModal]) {
+for (const modal of [loginModal, qrModal, adminMenu]) {
   modal.querySelector('[data-close]').addEventListener('click', () => (modal.hidden = true));
 }
 
@@ -160,12 +181,15 @@ function updateSelectionBar() {
 
 document.getElementById('selCancel').addEventListener('click', clearSelection);
 
-document.getElementById('selAll').addEventListener('click', () => {
+function toggleSelectAll() {
+  if (!state.items.length) return toast('No hay nada que seleccionar', true);
   if (state.selected.size === state.items.length) state.selected.clear();
   else state.items.forEach((i) => state.selected.add(i.id));
   updateSelectionBar();
   renderGallery();
-});
+}
+
+document.getElementById('selAll').addEventListener('click', toggleSelectAll);
 
 document.getElementById('selDownload').addEventListener('click', () => {
   if (!state.selected.size) return toast('No hay nada seleccionado', true);
