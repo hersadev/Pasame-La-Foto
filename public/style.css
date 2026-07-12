@@ -1002,3 +1002,183 @@ body.landing-body {
   text-align: center;
   cursor: pointer;
 }
+/* ============ Panel de administración (/admin) ============ */
+
+/* El panel necesita ancho de tabla, no la columna estrecha del login */
+.admin-page {
+  justify-content: flex-start;
+  padding-top: 3rem;
+}
+
+.admin-panel {
+  width: 100%;
+  max-width: 980px;
+  display: flex;
+  flex-direction: column;
+  gap: 1.4rem;
+}
+
+.admin-card {
+  background: color-mix(in srgb, #fff 45%, var(--bg));
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  padding: 1.6rem;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+}
+
+.admin-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
+.admin-card-head h2 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 1.3rem;
+}
+
+.btn-compact {
+  padding: 0.5rem 1.1rem;
+  font-size: 0.85rem;
+}
+
+/* --- Códigos de invitación --- */
+
+.invite-list {
+  list-style: none;
+  margin-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.invite-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.invite-code {
+  flex: 1;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+/* --- Tabla de usuarios --- */
+
+.table-scroll {
+  overflow-x: auto;
+  margin-top: 0.6rem;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  min-width: 720px;
+}
+
+.admin-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.6rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-table td {
+  padding: 0.7rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.admin-table a {
+  color: var(--accent-dark);
+}
+
+.cell-sub {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.cell-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-block;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chip-ok {
+  background: color-mix(in srgb, var(--accent-2) 22%, transparent);
+  color: var(--accent-2);
+}
+
+.chip-warn {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.chip-muted {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  color: var(--muted);
+}
+
+/* --- Banner de días de uso (galería) --- */
+
+.storage-banner.banner-warn {
+  color: var(--danger);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+/* ============ Botón de ver contraseña ============ */
+
+.pw-field {
+  position: relative;
+  width: 100%;
+}
+
+.pw-field input {
+  width: 100%;
+  padding-right: 3rem; /* hueco para el ojo, que no tape el texto */
+}
+
+.pw-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.9rem;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.pw-toggle:hover {
+  color: var(--ink);
+}

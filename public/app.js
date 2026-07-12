@@ -35,10 +35,18 @@ const qrDownload = document.getElementById('qrDownload');
 const settingsModal = document.getElementById('settingsModal');
 const settingsForm = document.getElementById('settingsForm');
 const eventNameInput = document.getElementById('eventName');
-const eventDateInput = document.getElementById('eventDate');
 const watermarkTextInput = document.getElementById('watermarkText');
 const accountEmailInput = document.getElementById('accountEmail');
+const usageInfo = document.getElementById('usageInfo');
 const storageBanner = document.getElementById('storageBanner');
+const usageBanner = document.getElementById('usageBanner');
+const addPhotosBtn = document.getElementById('addPhotosBtn');
+
+const startDateModal = document.getElementById('startDateModal');
+const startDateForm = document.getElementById('startDateForm');
+const startDateInput = document.getElementById('startDateInput');
+const startDateError = document.getElementById('startDateError');
+const startDaysCount = document.getElementById('startDaysCount');
 
 const uploadPermModal = document.getElementById('uploadPermModal');
 const uploadPermOk = document.getElementById('uploadPermOk');
@@ -85,9 +93,81 @@ async function refreshSession() {
   selectAllTop.hidden = !isAdmin;
   if (!isAdmin) state.selected.clear();
   updateSelectionBar();
-  if (isAdmin) checkStorage();
-  else storageBanner.hidden = true;
+  if (isAdmin) {
+    checkStorage();
+    checkUsage();
+  } else {
+    storageBanner.hidden = true;
+    usageBanner.hidden = true;
+  }
 }
+
+// ---------- Ventana de uso (día de inicio + días restantes) ----------
+// La cuenta tiene una ventana de uso limitada: si el dueño aún no ha fijado el
+// día de inicio, un modal obligatorio se lo pide; con la fecha ya fijada se
+// muestra cuántos días quedan antes del borrado definitivo.
+
+function fmtDay(value) {
+  const date = typeof value === 'string' ? new Date(`${value}T00:00:00`) : new Date(value);
+  return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function checkUsage() {
+  try {
+    const res = await fetch(`${API}/admin/settings`);
+    if (!res.ok) return;
+    const s = await res.json();
+
+    if (!s.startDate) {
+      // Sin día de inicio no hay ventana: el modal es obligatorio
+      startDaysCount.textContent = s.usageDays;
+      startDateInput.min = todayISO();
+      startDateModal.hidden = false;
+      usageBanner.hidden = true;
+      addPhotosBtn.hidden = true;
+      return;
+    }
+
+    startDateModal.hidden = true;
+    if (!s.active) {
+      // Fecha fijada en el futuro: se puede preparar, pero no subir todavía
+      addPhotosBtn.hidden = true;
+      usageBanner.textContent = `📅 Tu galería se abrirá el ${fmtDay(s.startDate)} y estará activa ${s.usageDays} días.`;
+      usageBanner.classList.remove('banner-warn');
+    } else {
+      addPhotosBtn.hidden = false;
+      usageBanner.textContent = `⏳ Quedan ${s.daysLeft} día${s.daysLeft === 1 ? '' : 's'} de uso. El ${fmtDay(s.expiresAt)} se eliminarán todas las fotos y tu cuenta.`;
+      usageBanner.classList.toggle('banner-warn', s.daysLeft <= 3);
+    }
+    usageBanner.hidden = false;
+  } catch {
+    // sin conexión: no molestamos con el aviso
+  }
+}
+
+startDateForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  startDateError.textContent = '';
+  const res = await fetch(`${API}/admin/start-date`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ startDate: startDateInput.value }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) {
+    startDateModal.hidden = true;
+    toast('Día de inicio fijado');
+    checkUsage();
+    loadGallery(); // la galería puede haberse activado en este momento
+  } else {
+    startDateError.textContent = data.error || 'No se pudo fijar el día de inicio';
+  }
+});
 
 // ---------- Aviso de espacio casi lleno ----------
 // Se avisa al organizador desde el 80% de su cuota, para que no le pille de
@@ -161,9 +241,11 @@ menuSettings.addEventListener('click', async () => {
   const res = await fetch(`${API}/admin/settings`);
   const settings = await res.json();
   eventNameInput.value = settings.eventName || '';
-  eventDateInput.value = settings.eventDate || '';
   watermarkTextInput.value = settings.watermarkText || '';
   accountEmailInput.value = settings.email || '';
+  usageInfo.textContent = settings.startDate
+    ? `Tu ventana de uso empieza el ${fmtDay(settings.startDate)} y termina el ${fmtDay(settings.expiresAt)} (${settings.usageDays} días). Después se eliminarán las fotos y la cuenta.`
+    : 'Todavía no has fijado el día de inicio de tu evento.';
   settingsModal.hidden = false;
 });
 
@@ -174,7 +256,6 @@ settingsForm.addEventListener('submit', async (e) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       eventName: eventNameInput.value,
-      eventDate: eventDateInput.value || null,
       watermarkText: watermarkTextInput.value,
       email: accountEmailInput.value,
     }),
@@ -335,7 +416,7 @@ async function compressImage(file) {
 
 let pendingDownloadable = null;
 
-document.getElementById('addPhotosBtn').addEventListener('click', () => {
+addPhotosBtn.addEventListener('click', () => {
   uploadPermModal.querySelector('input[value="all"]').checked = true;
   uploadPermModal.hidden = false;
 });

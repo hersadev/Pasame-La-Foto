@@ -21,9 +21,15 @@ const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(UPLOAD_DIR, '.data');
 const USERS_PATH = path.join(DATA_DIR, 'users.json');
 const INVITES_PATH = path.join(DATA_DIR, 'invites.json');
-const EXPIRATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 días desde la fecha del evento
+const DEFAULT_USAGE_DAYS = 15; // ventana de uso desde el día de inicio que fija el usuario
 const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
 const IS_HTTPS = PUBLIC_URL.startsWith('https://');
+
+// Credenciales del SuperAdministrador. Sin ellas en el .env, el panel /admin
+// y toda la API /api/sa/* quedan desactivados (responden 404).
+const SUPERADMIN_USER = process.env.SUPERADMIN_USER || '';
+const SUPERADMIN_PASSWORD = process.env.SUPERADMIN_PASSWORD || '';
+const SUPERADMIN_ENABLED = Boolean(SUPERADMIN_USER && SUPERADMIN_PASSWORD);
 
 // Sin valores por defecto: un despliegue con el .env a medio configurar
 // no debe arrancar con un secreto de sesión adivinable.
@@ -208,6 +214,51 @@ function sessionEventId(req) {
 
 function isEventAdmin(req, eventId) {
   return sessionEventId(req) === eventId;
+}
+
+// Cuenta dueña de un evento (o null): users.json es pequeño, la búsqueda lineal basta
+function accountForEvent(eventId) {
+  return Object.values(readUsers()).find((acc) => acc.eventId === eventId) || null;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Ventana de uso de una cuenta: empieza a las 00:00 (hora del servidor) del
+// día de inicio que fijó el usuario y dura `usageDays` días completos; con los
+// 15 por defecto, el día 16 la cuenta caduca y se borra todo.
+function eventWindow(account) {
+  const startDate = account?.startDate || null;
+  if (!startDate || !DATE_RE.test(startDate)) {
+    return { startDate: null, expiresAt: null, daysLeft: null, active: false };
+  }
+  const usageDays = account.usageDays || DEFAULT_USAGE_DAYS;
+  const startMs = new Date(`${startDate}T00:00:00`).getTime();
+  const expiresAt = startMs + usageDays * DAY_MS;
+  const now = Date.now();
+  return {
+    startDate,
+    usageDays,
+    expiresAt,
+    daysLeft: Math.max(0, Math.ceil((expiresAt - now) / DAY_MS)),
+    active: now >= startMs && now < expiresAt,
+  };
+}
+
+// Cierra el evento a los invitados fuera de la ventana de uso. El dueño con
+// sesión puede entrar antes del inicio para prepararlo (ajustes, QR), pero
+// nadie —tampoco él— puede usar la galería fuera de sus días.
+function requireActiveEvent(req, res, next) {
+  if (eventWindow(accountForEvent(req.event.id)).active) return next();
+  if (isEventAdmin(req, req.event.id)) return next();
+  res.status(403).json({ error: 'La galería no está abierta en este momento' });
+}
+
+// Igual que requireActiveEvent pero sin excepción para el dueño: subir fotos
+// solo está permitido dentro de los días de uso.
+function requireActiveEventStrict(req, res, next) {
+  if (eventWindow(accountForEvent(req.event.id)).active) return next();
+  res.status(403).json({ error: 'La galería no está abierta en este momento' });
 }
 
 // Valida el :eventId de la URL y deja el evento en req.event
@@ -412,6 +463,13 @@ function totalUploadsSize() {
   return total;
 }
 
+// Cuota de un evento en GB: la general, salvo que el SuperAdministrador le
+// haya concedido más espacio a esa cuenta en concreto.
+function eventQuotaGB(eventId) {
+  const account = accountForEvent(eventId);
+  return account?.quotaGB || MAX_TOTAL_GB;
+}
+
 // Rechaza subidas cuando el evento (cuota individual) o el conjunto del servidor
 // (disco compartido) ya no tienen sitio. Se suma el Content-Length como cota
 // superior de lo que llega para frenar antes de escribir nada en disco; multer
@@ -421,7 +479,7 @@ function checkTotalSpace(req, res, next) {
   const incoming = parseInt(req.headers['content-length'], 10) || 0;
 
   const eventUsed = dirSize(req.event.dir);
-  if (eventUsed + incoming > MAX_TOTAL_GB * 1024 ** 3) {
+  if (eventUsed + incoming > eventQuotaGB(req.event.id) * 1024 ** 3) {
     return res.status(507).json({ error: 'Se ha alcanzado el espacio máximo del evento' });
   }
 
@@ -560,7 +618,15 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 
   const eventId = newEventId();
   createEventDirs(eventDirs(eventId));
-  users[user] = { passwordHash, eventId, email: userEmail, createdAt: Date.now(), sessionEpoch: 1 };
+  users[user] = {
+    passwordHash,
+    eventId,
+    email: userEmail,
+    createdAt: Date.now(),
+    sessionEpoch: 1,
+    startDate: null, // el día de inicio se fija desde el portal (modal obligatorio)
+    usageDays: DEFAULT_USAGE_DAYS,
+  };
   writeUsers(users);
   writeInvites(invites.filter((c) => c !== code)); // el código se consume
   req.session.user = user;
@@ -666,25 +732,41 @@ app.get('/api/me', (req, res) => {
 
 // ---------- Página y API pública del evento (invitados) ----------
 
-// La galería: la misma página para invitados y para el admin del evento
+function closedPage(title, message) {
+  return `<!doctype html><html lang="es"><meta charset="utf-8"><title>${title}</title><body style="font-family:sans-serif;text-align:center;padding:3rem"><h1>${title}</h1><p>${message}</p><a href="/">Ir al inicio</a></body></html>`;
+}
+
+// La galería: la misma página para invitados y para el admin del evento.
+// Fuera de la ventana de uso, los invitados ven una página informativa;
+// el dueño puede entrar antes del inicio para preparar el evento.
 app.get('/e/:eventId', (req, res) => {
   const { eventId } = req.params;
   if (!EVENT_ID_RE.test(eventId) || !fs.existsSync(path.join(UPLOAD_DIR, eventId))) {
+    return res.status(404).send(closedPage('Evento no encontrado', 'Revisa el enlace o el código QR.'));
+  }
+  const window = eventWindow(accountForEvent(eventId));
+  if (!window.active && !isEventAdmin(req, eventId)) {
+    const notStarted = !window.startDate || Date.now() < new Date(`${window.startDate}T00:00:00`).getTime();
     return res
-      .status(404)
-      .send('<!doctype html><html lang="es"><meta charset="utf-8"><title>Evento no encontrado</title><body style="font-family:sans-serif;text-align:center;padding:3rem"><h1>Evento no encontrado</h1><p>Revisa el enlace o el código QR.</p><a href="/">Ir al inicio</a></body></html>');
+      .status(403)
+      .send(
+        notStarted
+          ? closedPage('La galería aún no está abierta', 'El organizador todavía no ha abierto este evento. Vuelve a intentarlo más adelante.')
+          : closedPage('El evento ha finalizado', 'Esta galería ya no está disponible.')
+      );
   }
   res.sendFile(path.join(__dirname, 'public', 'event.html'));
 });
 
 // Nombre del evento (público: el hero de la galería lo muestra a los invitados)
-app.get('/api/e/:eventId/info', loadEvent, (req, res) => {
+app.get('/api/e/:eventId/info', loadEvent, requireActiveEvent, (req, res) => {
   const { eventName } = readSettings(req.event);
   res.json({ eventName: eventName || '' });
 });
 
-// Subir uno o varios archivos (las imágenes se comprimen al recibirlas)
-app.post('/api/e/:eventId/upload', uploadLimiter, loadEvent, checkTotalSpace, upload.array('files', 20), async (req, res, next) => {
+// Subir uno o varios archivos (las imágenes se comprimen al recibirlas).
+// Solo dentro de la ventana de uso: fuera de ella nadie sube, tampoco el dueño.
+app.post('/api/e/:eventId/upload', uploadLimiter, loadEvent, requireActiveEventStrict, checkTotalSpace, upload.array('files', 20), async (req, res, next) => {
   try {
     const downloadable = req.body.downloadable === 'all' ? 'all' : 'admin';
     const meta = readMediaMeta(req.event);
@@ -700,7 +782,7 @@ app.post('/api/e/:eventId/upload', uploadLimiter, loadEvent, checkTotalSpace, up
 });
 
 // Listar los archivos subidos
-app.get('/api/e/:eventId/media', loadEvent, (req, res) => {
+app.get('/api/e/:eventId/media', loadEvent, requireActiveEvent, (req, res) => {
   const ev = req.event;
   const meta = readMediaMeta(ev);
   const admin = isEventAdmin(req, ev.id);
@@ -730,7 +812,7 @@ app.get('/api/e/:eventId/media', loadEvent, (req, res) => {
 });
 
 // Servir una miniatura (con marca de agua para invitados si está configurada)
-app.get('/e/:eventId/thumbs/:name', loadEvent, async (req, res) => {
+app.get('/e/:eventId/thumbs/:name', loadEvent, requireActiveEvent, async (req, res) => {
   const name = req.params.name;
   if (name !== path.basename(name) || name.startsWith('.')) return res.status(404).end();
   const resolved = path.resolve(req.event.thumbs, name);
@@ -740,14 +822,14 @@ app.get('/e/:eventId/thumbs/:name', loadEvent, async (req, res) => {
 
 // Servir un archivo SOLO para visualización (inline, no como descarga;
 // con marca de agua para invitados si está configurada)
-app.get('/e/:eventId/media/:name', loadEvent, async (req, res) => {
+app.get('/e/:eventId/media/:name', loadEvent, requireActiveEvent, async (req, res) => {
   const filePath = safeFilePath(req.event, req.params.name);
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).end();
   await sendMaybeWatermarked(req, res, req.event, filePath, req.event.wmDisplay);
 });
 
 // Descargar un archivo si está permitido para todos (o si es el admin del evento); siempre sin marca de agua
-app.get('/api/e/:eventId/download/:name', loadEvent, (req, res) => {
+app.get('/api/e/:eventId/download/:name', loadEvent, requireActiveEvent, (req, res) => {
   const filePath = safeFilePath(req.event, req.params.name);
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).end();
   const meta = readMediaMeta(req.event);
@@ -800,7 +882,7 @@ app.delete('/api/e/:eventId/admin/media/:name', loadEvent, requireEventAdmin, (r
 // antes de que las subidas empiecen a rechazarse.
 app.get('/api/e/:eventId/admin/storage', loadEvent, requireEventAdmin, (req, res) => {
   const usedBytes = dirSize(req.event.dir);
-  const maxBytes = MAX_TOTAL_GB * 1024 ** 3;
+  const maxBytes = eventQuotaGB(req.event.id) * 1024 ** 3;
   res.json({ usedBytes, maxBytes, pct: Math.min(1, usedBytes / maxBytes) });
 });
 
@@ -808,7 +890,38 @@ app.get('/api/e/:eventId/admin/storage', loadEvent, requireEventAdmin, (req, res
 
 app.get('/api/e/:eventId/admin/settings', loadEvent, requireEventAdmin, (req, res) => {
   const account = readUsers()[req.session.user];
-  res.json({ ...readSettings(req.event), email: account?.email || '' });
+  const window = eventWindow(account);
+  res.json({
+    ...readSettings(req.event),
+    email: account?.email || '',
+    startDate: window.startDate,
+    usageDays: account?.usageDays || DEFAULT_USAGE_DAYS,
+    expiresAt: window.expiresAt,
+    daysLeft: window.daysLeft,
+    active: window.active,
+  });
+});
+
+// Fijar el día de inicio de la ventana de uso. Solo una vez: a partir de ahí
+// únicamente el SuperAdministrador puede cambiarlo o dar más días.
+app.post('/api/e/:eventId/admin/start-date', loadEvent, requireEventAdmin, (req, res) => {
+  const startDate = String((req.body || {}).startDate || '');
+  if (!DATE_RE.test(startDate) || Number.isNaN(new Date(`${startDate}T00:00:00`).getTime())) {
+    return res.status(400).json({ error: 'Fecha de inicio no válida' });
+  }
+  const todayStart = new Date(new Date().toDateString()).getTime();
+  if (new Date(`${startDate}T00:00:00`).getTime() < todayStart) {
+    return res.status(400).json({ error: 'La fecha de inicio no puede ser anterior a hoy' });
+  }
+  const users = readUsers();
+  const account = users[req.session.user];
+  if (!account) return res.status(401).json({ error: 'No autorizado' });
+  if (account.startDate) {
+    return res.status(409).json({ error: 'El día de inicio ya está fijado y no se puede cambiar' });
+  }
+  account.startDate = startDate;
+  writeUsers(users);
+  res.json({ ok: true, ...eventWindow(account) });
 });
 
 app.post('/api/e/:eventId/admin/settings', loadEvent, requireEventAdmin, (req, res) => {
@@ -843,37 +956,194 @@ app.get('/e/:eventId/qr', loadEvent, requireEventAdmin, async (req, res) => {
   res.type('png').send(png);
 });
 
-// ---------- Expiración automática de los eventos ----------
-// 30 días después de la fecha fijada por cada admin, se borra el contenido
-// subido a su evento. La fecha vuelve a null para poder reutilizar el portal
-// en un evento siguiente (la cuenta, el nombre y la marca de agua se conservan).
+// ---------- SuperAdministrador ----------
+// Panel en /admin con credenciales del .env (SUPERADMIN_USER / SUPERADMIN_PASSWORD).
+// Desde él se generan los códigos de invitación, se ven las cuentas activas y
+// se gestionan: más días de uso, más espacio, eliminar, reprogramar el inicio.
 
-function clearDir(dir) {
-  for (const f of fs.readdirSync(dir)) {
-    const p = path.join(dir, f);
-    if (fs.statSync(p).isFile()) fs.unlinkSync(p);
+// Comparación de tiempo constante: se comparan los hashes (longitud fija) para
+// no filtrar por temporización ni la longitud ni el contenido de la credencial.
+function safeEqual(a, b) {
+  const ha = crypto.createHash('sha256').update(String(a)).digest();
+  const hb = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
+function requireSuperadmin(req, res, next) {
+  if (!SUPERADMIN_ENABLED) return res.status(404).json({ error: 'No encontrado' });
+  if (req.session.superadmin) return next();
+  res.status(401).json({ error: 'No autorizado' });
+}
+
+app.get('/admin', (req, res) => {
+  if (!SUPERADMIN_ENABLED) return res.status(404).send(closedPage('No encontrado', 'Esta página no existe.'));
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+app.post('/api/sa/login', loginLimiter, (req, res) => {
+  if (!SUPERADMIN_ENABLED) return res.status(404).json({ error: 'No encontrado' });
+  const { username, password } = req.body || {};
+  const userOk = safeEqual(username || '', SUPERADMIN_USER);
+  const passOk = safeEqual(password || '', SUPERADMIN_PASSWORD);
+  if (!userOk || !passOk) return res.status(401).json({ error: 'Credenciales incorrectas' });
+  req.session.superadmin = true;
+  res.json({ ok: true });
+});
+
+app.post('/api/sa/logout', (req, res) => {
+  req.session = null;
+  res.json({ ok: true });
+});
+
+app.get('/api/sa/me', (req, res) => {
+  if (!SUPERADMIN_ENABLED) return res.status(404).json({ error: 'No encontrado' });
+  res.json({ superadmin: !!req.session.superadmin });
+});
+
+// Cuentas registradas, con su ventana de uso y el espacio que ocupan
+app.get('/api/sa/users', requireSuperadmin, (req, res) => {
+  const users = readUsers();
+  const list = Object.entries(users).map(([username, account]) => {
+    const ev = eventDirs(account.eventId);
+    const window = eventWindow(account);
+    return {
+      username,
+      email: account.email || '',
+      eventId: account.eventId,
+      createdAt: account.createdAt || null,
+      startDate: window.startDate,
+      usageDays: account.usageDays || DEFAULT_USAGE_DAYS,
+      daysLeft: window.daysLeft,
+      expiresAt: window.expiresAt,
+      active: window.active,
+      usedBytes: fs.existsSync(ev.dir) ? dirSize(ev.dir) : 0,
+      quotaGB: eventQuotaGB(account.eventId),
+    };
+  });
+  res.json(list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+});
+
+// Gestionar una cuenta: más días de uso, más espacio o reprogramar el inicio
+app.patch('/api/sa/users/:username', requireSuperadmin, (req, res) => {
+  const users = readUsers();
+  const account = users[req.params.username];
+  if (!account) return res.status(404).json({ error: 'Usuario no encontrado' });
+  const { usageDays, quotaGB, startDate } = req.body || {};
+
+  if (usageDays !== undefined) {
+    const days = parseInt(usageDays, 10);
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      return res.status(400).json({ error: 'Los días de uso deben estar entre 1 y 365' });
+    }
+    account.usageDays = days;
+    delete account.expiryWarned; // con más días, el aviso de caducidad vuelve a proceder
   }
+  if (quotaGB !== undefined) {
+    const gb = parseFloat(quotaGB);
+    if (!Number.isFinite(gb) || gb <= 0 || gb > 1000) {
+      return res.status(400).json({ error: 'La cuota debe ser un número de GB válido' });
+    }
+    account.quotaGB = gb;
+  }
+  if (startDate !== undefined) {
+    if (startDate === null || startDate === '') {
+      account.startDate = null; // el usuario volverá a ver el modal de día de inicio
+      delete account.expiryWarned;
+    } else if (DATE_RE.test(String(startDate))) {
+      account.startDate = String(startDate);
+      delete account.expiryWarned;
+    } else {
+      return res.status(400).json({ error: 'Fecha de inicio no válida' });
+    }
+  }
+
+  writeUsers(users);
+  res.json({ ok: true, ...eventWindow(account), usageDays: account.usageDays, quotaGB: eventQuotaGB(account.eventId) });
+});
+
+// Eliminar una cuenta y todo su evento (libera el espacio al momento)
+app.delete('/api/sa/users/:username', requireSuperadmin, (req, res) => {
+  const users = readUsers();
+  if (!users[req.params.username]) return res.status(404).json({ error: 'Usuario no encontrado' });
+  removeAccount(users, req.params.username);
+  writeUsers(users);
+  res.json({ ok: true });
+});
+
+// Códigos de invitación sin usar
+app.get('/api/sa/invites', requireSuperadmin, (req, res) => {
+  res.json(readInvites());
+});
+
+// Generar un código nuevo (mismo formato que scripts/invitacion.js)
+const INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin caracteres que se confunden (I/1, O/0)
+
+function newInviteCode() {
+  const block = (n) => Array.from({ length: n }, () => INVITE_ALPHABET[crypto.randomInt(INVITE_ALPHABET.length)]).join('');
+  return `${block(4)}-${block(4)}`;
+}
+
+app.post('/api/sa/invites', requireSuperadmin, (req, res) => {
+  const invites = readInvites();
+  const code = newInviteCode();
+  invites.push(code);
+  writeInvites(invites);
+  res.json({ ok: true, code });
+});
+
+// Revocar un código sin usar
+app.delete('/api/sa/invites/:code', requireSuperadmin, (req, res) => {
+  const invites = readInvites();
+  const code = String(req.params.code || '').toUpperCase();
+  if (!invites.includes(code)) return res.status(404).json({ error: 'Código no encontrado' });
+  writeInvites(invites.filter((c) => c !== code));
+  res.json({ ok: true });
+});
+
+// ---------- Expiración automática de las cuentas ----------
+// Al acabar la ventana de uso (por defecto 15 días desde el día de inicio) se
+// borra la carpeta completa del evento y la propia cuenta: el espacio queda
+// libre y el código de invitación ya se consumió al registrarse. Dos días
+// antes se avisa por email para que el organizador descargue sus fotos.
+
+const EXPIRY_WARNING_DAYS = 2;
+
+// Borra la carpeta del evento y la cuenta. `users` se muta; quien llama escribe.
+function removeAccount(users, username) {
+  const account = users[username];
+  if (!account) return;
+  const ev = eventDirs(account.eventId);
+  fs.rmSync(ev.dir, { recursive: true, force: true });
+  delete users[username];
 }
 
 function checkExpiration() {
   const users = readUsers();
-  for (const { eventId } of Object.values(users)) {
-    const ev = eventDirs(eventId);
-    if (!fs.existsSync(ev.dir)) continue;
-    const settings = readSettings(ev);
-    if (!settings.eventDate) continue;
-    const expiresAt = new Date(settings.eventDate).getTime() + EXPIRATION_MS;
-    if (Date.now() < expiresAt) continue;
+  let dirty = false;
+  for (const [username, account] of Object.entries(users)) {
+    const window = eventWindow(account);
+    if (!window.startDate) continue;
 
-    clearDir(ev.dir);
-    clearDir(ev.thumbs);
-    clearDir(ev.wmThumbs);
-    clearDir(ev.wmDisplay);
-    writeMediaMeta(ev, {});
-    settings.eventDate = null;
-    writeSettings(ev, settings);
-    console.log(`Evento ${eventId} expirado: se ha borrado todo el contenido subido.`);
+    if (Date.now() >= window.expiresAt) {
+      removeAccount(users, username);
+      dirty = true;
+      console.log(`Cuenta "${username}" caducada: evento ${account.eventId} y cuenta eliminados.`);
+      continue;
+    }
+
+    if (window.daysLeft <= EXPIRY_WARNING_DAYS && !account.expiryWarned && account.email) {
+      account.expiryWarned = true; // se marca antes de enviar para no reintentar en bucle cada hora
+      dirty = true;
+      const expiryDate = new Date(window.expiresAt).toLocaleDateString('es-ES');
+      const galleryLink = `${PUBLIC_URL}/e/${account.eventId}`;
+      sendMail({
+        to: account.email,
+        subject: 'Tu galería caduca pronto — Pásame la foto',
+        text: `Hola ${username},\n\nTu galería de Pásame la foto caducará el ${expiryDate}. Ese día se eliminarán definitivamente todas las fotos y tu cuenta.\n\nEntra y descarga el ZIP con todas tus fotos antes de esa fecha:\n${galleryLink}\n\n¡Gracias por usar Pásame la foto!`,
+      }).catch((err) => console.error(`Error enviando el aviso de caducidad a "${username}":`, err.message));
+    }
   }
+  if (dirty) writeUsers(users);
 }
 
 checkExpiration();

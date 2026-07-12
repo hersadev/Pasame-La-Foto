@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#f5ead8" />
+  <meta name="robots" content="noindex" />
+  <title>Panel de administración — Pásame la foto</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Caprasimo&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="landing-body">
+
+  <main class="landing admin-page">
+    <h1 class="landing-brand">Pásame la foto</h1>
+    <p class="landing-sub">Panel de administración</p>
+
+    <!-- Login del SuperAdministrador -->
+    <section id="loginView" class="auth-card" hidden>
+      <form id="saLoginForm">
+        <h2>SuperAdministrador</h2>
+        <input type="text" id="saUser" placeholder="Usuario" autocomplete="username" autocapitalize="none" spellcheck="false" required />
+        <input type="password" id="saPass" placeholder="Contraseña" autocomplete="current-password" required />
+        <button type="submit" class="btn-gold">Entrar</button>
+        <p id="saLoginError" class="form-error"></p>
+      </form>
+    </section>
+
+    <!-- Panel -->
+    <section id="panelView" class="admin-panel" hidden>
+
+      <div class="admin-card">
+        <div class="admin-card-head">
+          <h2>Códigos de invitación</h2>
+          <button id="genInvite" class="btn-gold btn-compact">Generar código</button>
+        </div>
+        <p class="field-hint">Cada código permite crear una cuenta y se consume al registrarse.</p>
+        <ul id="inviteList" class="invite-list"></ul>
+        <p id="inviteEmpty" class="field-hint" hidden>No hay códigos sin usar.</p>
+      </div>
+
+      <div class="admin-card">
+        <div class="admin-card-head">
+          <h2>Usuarios</h2>
+          <button id="reloadBtn" class="btn-ghost btn-compact">Recargar</button>
+        </div>
+        <div class="table-scroll">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Usuario</th>
+                <th>Evento</th>
+                <th>Estado</th>
+                <th>Días de uso</th>
+                <th>Espacio</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="usersBody"></tbody>
+          </table>
+        </div>
+        <p id="usersEmpty" class="field-hint" hidden>Ningún usuario registrado todavía.</p>
+      </div>
+
+      <button id="saLogout" class="link-btn">Cerrar sesión</button>
+    </section>
+  </main>
+
+  <!-- Aviso (toast) -->
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/pw-toggle.js"></script>
+  <script src="/admin.js"></script>
+</body>
+</html>
