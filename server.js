@@ -12,6 +12,7 @@ const sharp = require('sharp');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
+const { sendMail } = require('./mailer');
 
 const app = express();
 
@@ -93,6 +94,25 @@ const registerLimiter = rateLimit({
   message: { error: 'Demasiados registros, prueba de nuevo más tarde' },
 });
 
+// Máximo 5 solicitudes de recuperación de contraseña por IP cada hora
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes, prueba de nuevo más tarde' },
+});
+
+// Máximo 20 descargas ZIP por IP cada 15 minutos: el ZIP empaqueta en directo
+// (archiver + disco), así que conviene frenar clics repetidos o abuso.
+const zipLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas descargas, prueba de nuevo en unos minutos' },
+});
+
 // ---------- Usuarios y eventos ----------
 // Cada cuenta tiene su evento: los archivos viven en uploads/<eventId>/ y la
 // estructura interna replica la del proyecto original (miniaturas, cachés de
@@ -100,7 +120,9 @@ const registerLimiter = rateLimit({
 
 const EVENT_ID_RE = /^[a-z0-9]{10}$/;
 const USERNAME_RE = /^[a-z0-9._-]{3,30}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const RESET_TOKEN_MS = 60 * 60 * 1000; // 1 hora de validez del enlace de recuperación
 
 function newEventId() {
   return Array.from({ length: 10 }, () => ID_ALPHABET[crypto.randomInt(ID_ALPHABET.length)]).join('');
@@ -409,6 +431,44 @@ async function processUpload(ev, file) {
   return path.basename(finalPath);
 }
 
+// Cola de procesado en segundo plano: comprimir y generar miniaturas con
+// sharp consume CPU; hacerlo dentro de la petición de subida bloquearía el
+// event loop cuando varios invitados suben fotos a la vez. Con concurrencia
+// limitada, el archivo se guarda tal cual y se sirve así (sin miniatura)
+// hasta que le llega su turno; la respuesta al cliente no espera a esto.
+const UPLOAD_PROCESS_CONCURRENCY = 2;
+let activeUploadJobs = 0;
+const uploadQueue = [];
+
+function enqueueUploadProcessing(ev, file) {
+  uploadQueue.push({ ev, file });
+  pumpUploadQueue();
+}
+
+function pumpUploadQueue() {
+  while (activeUploadJobs < UPLOAD_PROCESS_CONCURRENCY && uploadQueue.length) {
+    const { ev, file } = uploadQueue.shift();
+    activeUploadJobs++;
+    processUpload(ev, file)
+      .then((finalName) => {
+        // Si la compresión renombró el archivo (p.ej. .png -> .jpg), la
+        // entrada de metadatos (permiso de descarga) debe seguir al nuevo nombre.
+        if (finalName === file.filename) return;
+        const meta = readMediaMeta(ev);
+        if (meta[file.filename]) {
+          meta[finalName] = meta[file.filename];
+          delete meta[file.filename];
+          writeMediaMeta(ev, meta);
+        }
+      })
+      .catch((err) => console.error(`Error procesando "${file.filename}":`, err.message))
+      .finally(() => {
+        activeUploadJobs--;
+        pumpUploadQueue();
+      });
+  }
+}
+
 // ---------- Autenticación y registro ----------
 
 // Hash de una contraseña aleatoria: cuando el usuario no existe se compara
@@ -418,13 +478,17 @@ const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 12);
 
 // Crear cuenta + evento con un código de invitación de un solo uso
 app.post('/api/register', registerLimiter, async (req, res) => {
-  const { username, password, inviteCode } = req.body || {};
+  const { username, password, email, inviteCode } = req.body || {};
   const user = String(username || '').trim().toLowerCase();
   if (!USERNAME_RE.test(user)) {
     return res.status(400).json({ error: 'Nombre de usuario no válido: 3-30 caracteres entre letras minúsculas, números y ". _ -"' });
   }
   if (typeof password !== 'string' || password.length < 8) {
     return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+  }
+  const userEmail = String(email || '').trim().toLowerCase();
+  if (!EMAIL_RE.test(userEmail)) {
+    return res.status(400).json({ error: 'Introduce un email válido: lo usaremos si necesitas recuperar tu contraseña' });
   }
   const code = String(inviteCode || '').trim().toUpperCase();
 
@@ -455,7 +519,7 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 
   const eventId = newEventId();
   createEventDirs(eventDirs(eventId));
-  users[user] = { passwordHash, eventId, createdAt: Date.now() };
+  users[user] = { passwordHash, eventId, email: userEmail, createdAt: Date.now() };
   writeUsers(users);
   writeInvites(invites.filter((c) => c !== code)); // el código se consume
   req.session.user = user;
@@ -478,6 +542,62 @@ app.post('/api/login', loginLimiter, async (req, res) => {
 app.post('/api/logout', (req, res) => {
   req.session = null;
   res.json({ ok: true });
+});
+
+// Solicitar recuperación de contraseña: responde igual exista o no ese email
+// para no filtrar qué correos están registrados.
+app.post('/api/forgot-password', forgotPasswordLimiter, async (req, res) => {
+  const email = String((req.body || {}).email || '').trim().toLowerCase();
+  const genericResponse = { ok: true, message: 'Si ese email tiene una cuenta, te hemos enviado un enlace para restablecer la contraseña' };
+  if (!EMAIL_RE.test(email)) return res.json(genericResponse);
+
+  const users = readUsers();
+  const entry = Object.entries(users).find(([, acc]) => acc.email === email);
+  if (!entry) return res.json(genericResponse);
+  const [username, account] = entry;
+
+  const token = crypto.randomBytes(32).toString('hex');
+  account.resetTokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  account.resetTokenExpires = Date.now() + RESET_TOKEN_MS;
+  writeUsers(users);
+
+  const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  const link = `${base}/?resetToken=${token}`;
+  try {
+    await sendMail({
+      to: email,
+      subject: 'Recupera tu contraseña — Pásame la foto',
+      text: `Hola ${username},\n\nPara restablecer tu contraseña, entra en este enlace (caduca en 1 hora):\n${link}\n\nSi no lo has pedido tú, ignora este correo.`,
+    });
+  } catch (err) {
+    console.error('Error enviando el email de recuperación:', err.message);
+  }
+  res.json(genericResponse);
+});
+
+app.post('/api/reset-password', async (req, res) => {
+  const { token, password } = req.body || {};
+  if (typeof password !== 'string' || password.length < 8) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
+  }
+  if (typeof token !== 'string' || !token) {
+    return res.status(400).json({ error: 'Enlace no válido o caducado' });
+  }
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const users = readUsers();
+  const entry = Object.entries(users).find(
+    ([, acc]) => acc.resetTokenHash === tokenHash && acc.resetTokenExpires > Date.now()
+  );
+  if (!entry) return res.status(400).json({ error: 'Enlace no válido o caducado' });
+  const [username, account] = entry;
+
+  account.passwordHash = await bcrypt.hash(password, 12);
+  delete account.resetTokenHash;
+  delete account.resetTokenExpires;
+  writeUsers(users);
+
+  req.session.user = username;
+  res.json({ ok: true, eventId: account.eventId });
 });
 
 app.get('/api/me', (req, res) => {
@@ -509,11 +629,13 @@ app.get('/api/e/:eventId/info', loadEvent, (req, res) => {
 app.post('/api/e/:eventId/upload', loadEvent, checkTotalSpace, upload.array('files', 20), async (req, res, next) => {
   try {
     const downloadable = req.body.downloadable === 'all' ? 'all' : 'admin';
-    const finalNames = await Promise.all(req.files.map((f) => processUpload(req.event, f)));
     const meta = readMediaMeta(req.event);
-    for (const name of finalNames) meta[name] = { downloadable };
+    for (const f of req.files) meta[f.filename] = { downloadable };
     writeMediaMeta(req.event, meta);
     res.json({ ok: true, count: req.files.length });
+    // La compresión y las miniaturas se generan después de responder: no
+    // bloquean al invitado que está subiendo ni a otros subiendo a la vez.
+    for (const f of req.files) enqueueUploadProcessing(req.event, f);
   } catch (err) {
     next(err);
   }
@@ -585,7 +707,7 @@ app.get('/api/e/:eventId/admin/download/:name', loadEvent, requireEventAdmin, (r
 });
 
 // Descargar varias fotos en un ZIP (?files=a.jpg,b.jpg), o toda la galería (?all=1)
-app.get('/api/e/:eventId/admin/zip', loadEvent, requireEventAdmin, (req, res) => {
+app.get('/api/e/:eventId/admin/zip', zipLimiter, loadEvent, requireEventAdmin, (req, res) => {
   const ev = req.event;
   const names =
     req.query.all === '1'
@@ -614,22 +736,41 @@ app.delete('/api/e/:eventId/admin/media/:name', loadEvent, requireEventAdmin, (r
   res.json({ ok: true });
 });
 
+// Espacio ocupado por el evento frente a su cuota, para avisar al organizador
+// antes de que las subidas empiecen a rechazarse.
+app.get('/api/e/:eventId/admin/storage', loadEvent, requireEventAdmin, (req, res) => {
+  const usedBytes = dirSize(req.event.dir);
+  const maxBytes = MAX_TOTAL_GB * 1024 ** 3;
+  res.json({ usedBytes, maxBytes, pct: Math.min(1, usedBytes / maxBytes) });
+});
+
 // ---------- Ajustes del evento (nombre, fecha para la expiración, marca de agua) ----------
 
 app.get('/api/e/:eventId/admin/settings', loadEvent, requireEventAdmin, (req, res) => {
-  res.json(readSettings(req.event));
+  const account = readUsers()[req.session.user];
+  res.json({ ...readSettings(req.event), email: account?.email || '' });
 });
 
 app.post('/api/e/:eventId/admin/settings', loadEvent, requireEventAdmin, (req, res) => {
-  const { eventDate, watermarkText, eventName } = req.body || {};
+  const { eventDate, watermarkText, eventName, email } = req.body || {};
   if (eventDate && Number.isNaN(new Date(eventDate).getTime())) {
     return res.status(400).json({ error: 'Fecha de evento no válida' });
+  }
+  const userEmail = String(email || '').trim().toLowerCase();
+  if (!EMAIL_RE.test(userEmail)) {
+    return res.status(400).json({ error: 'Introduce un email válido para la recuperación de contraseña' });
   }
   const settings = readSettings(req.event);
   settings.eventDate = eventDate || null;
   settings.watermarkText = String(watermarkText || '').slice(0, 80);
   settings.eventName = String(eventName || '').slice(0, 60);
   writeSettings(req.event, settings);
+
+  const users = readUsers();
+  if (users[req.session.user]) {
+    users[req.session.user].email = userEmail;
+    writeUsers(users);
+  }
   res.json({ ok: true });
 });
 
