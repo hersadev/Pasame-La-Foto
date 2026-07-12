@@ -21,6 +21,12 @@ RUN npm install --omit=dev
 COPY server.js mailer.js ./
 COPY public ./public
 
+# uploads/ se monta como volumen y el proceso escribe ahí: debe pertenecer al
+# usuario sin privilegios con el que corremos. No arrancamos como root para que
+# un fallo en el manejo de archivos no dé control del contenedor entero.
+RUN mkdir -p /app/uploads && chown -R node:node /app
+USER node
+
 EXPOSE 3000
 
 CMD ["node", "server.js"]
