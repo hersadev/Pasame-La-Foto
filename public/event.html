@@ -50,6 +50,9 @@
   <!-- Aviso de espacio casi lleno (admin) -->
   <div id="storageBanner" class="storage-banner admin-only" hidden></div>
 
+  <!-- Días de uso restantes (admin) -->
+  <div id="usageBanner" class="storage-banner admin-only" hidden></div>
+
   <!-- Portada -->
   <section class="hero">
     <div class="hero-blob" aria-hidden="true"></div>
@@ -116,9 +119,8 @@
         <label class="field-label" for="eventName">Nombre del evento</label>
         <input type="text" id="eventName" placeholder="Ej. Boda de Ana &amp; Luis" maxlength="60" />
         <p class="field-hint">Se muestra como título de la galería.</p>
-        <label class="field-label" for="eventDate">Fecha del evento</label>
-        <input type="date" id="eventDate" />
-        <p class="field-hint">Las fotos se borrarán automáticamente 30 días después.</p>
+        <p class="field-label">Días de uso</p>
+        <p id="usageInfo" class="field-hint"></p>
         <label class="field-label" for="watermarkText">Marca de agua (texto)</label>
         <input type="text" id="watermarkText" placeholder="Ej. Boda de Ana &amp; Luis" maxlength="60" />
         <p class="field-hint">Se muestra solo a los invitados al ver fotos. Déjalo vacío para no mostrar ninguna.</p>
@@ -149,6 +151,22 @@
         <button id="uploadPermCancel" class="btn-ghost">Cancelar</button>
         <button id="uploadPermOk" class="btn-gold">Subir</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Modal obligatorio: fijar el día de inicio (sin botón de cerrar) -->
+  <div id="startDateModal" class="modal" hidden>
+    <div class="modal-backdrop"></div>
+    <div class="modal-sheet">
+      <h2>Elige el día de inicio</h2>
+      <p class="confirm-text">Tu portal estará activo durante <strong id="startDaysCount">15</strong> días desde la fecha que elijas. Al terminar ese plazo se eliminarán definitivamente todas las fotos y tu cuenta, y tu código de invitación quedará invalidado.</p>
+      <form id="startDateForm">
+        <label class="field-label" for="startDateInput">Día de inicio</label>
+        <input type="date" id="startDateInput" required />
+        <p class="field-hint">A partir de ese día tus invitados podrán ver y subir fotos. Esta fecha no se puede cambiar después: elígela con calma.</p>
+        <button type="submit" class="btn-gold">Fijar día de inicio</button>
+        <p id="startDateError" class="form-error"></p>
+      </form>
     </div>
   </div>
 

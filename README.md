@@ -5,7 +5,9 @@ Galería colaborativa de fotos para eventos, multiportal. Cada organizador (una 
 ## ✨ Características
 
 - 🏠 **Un portal por evento**: cada cuenta tiene su propia galería aislada en una URL aleatoria no adivinable (`/e/x7k2m9q4ab`).
-- 🎟️ **Registro con código de invitación**: solo crea portal quien tenga un código generado por el dueño del servidor (`npm run invitacion`).
+- 🎟️ **Registro con código de invitación**: solo crea portal quien tenga un código generado desde el panel de SuperAdministrador (`/admin`) o con `npm run invitacion`.
+- 👑 **Panel de SuperAdministrador** (`/admin`): genera y revoca códigos, lista las cuentas con su espacio y sus días restantes, y permite dar más días, más espacio, reprogramar el inicio o eliminar cuentas.
+- ⏳ **Ventana de uso de 15 días**: cada organizador fija el día de inicio de su evento (un modal se lo pide al entrar); al terminar la ventana se eliminan automáticamente las fotos y la cuenta, liberando el espacio. Dos días antes recibe un email de aviso.
 - 📱 **Pensada para el móvil**: el invitado escanea el QR, pulsa "Añadir fotos" y listo. Sin registro para invitados.
 - 🖼️ **Galería en vivo** con miniaturas ligeras y visor a pantalla completa.
 - 🗜️ **Compresión automática** de las fotos al subirlas (redimensionado + JPEG optimizado con sharp) y miniaturas de 480 px para que la galería cargue rápido.
@@ -45,21 +47,22 @@ La web queda en `http://localhost:3000`. Con el código de invitación, cada org
 | `SESSION_SECRET` | *(obligatoria)* | Cadena aleatoria larga para firmar las sesiones. El servidor no arranca sin ella. |
 | `PUBLIC_URL` | URL del propio servidor | URL pública base de los códigos QR. Si empieza por `https://`, la cookie de sesión se marca como `secure`. |
 | `MAX_FILE_MB` | `100` | Tamaño máximo por archivo (MB). |
-| `MAX_TOTAL_GB` | `20` | Espacio máximo por evento; al alcanzarlo se rechazan subidas. |
+| `MAX_TOTAL_GB` | `5` | Espacio máximo por evento; al alcanzarlo se rechazan subidas. El SuperAdministrador puede ampliar la cuota de cuentas concretas. |
+| `SUPERADMIN_USER` / `SUPERADMIN_PASSWORD` | *(vacías)* | Credenciales del panel `/admin`. Sin ellas, el panel y su API quedan desactivados (404). |
 | `IMAGE_MAX_SIDE` | `2560` | Lado mayor (px) de las fotos tras comprimirlas. |
 | `IMAGE_QUALITY` | `82` | Calidad JPEG de la compresión. |
 
 ## 🧭 Uso
 
-- **Dueño del servidor**: genera códigos de invitación con `npm run invitacion` (cada código vale para un solo registro) y se los pasa a los organizadores.
-- **Organizador (admin de su evento)**: entra en la portada, crea su portal con el código de invitación y accede con su usuario y contraseña. En su galería tiene el menú de administración: código QR, descarga en ZIP, borrado múltiple y ajustes (nombre del evento, fecha y marca de agua). El candado de su galería lleva de vuelta al login.
+- **SuperAdministrador (dueño del servidor)**: entra en `/admin` con las credenciales del `.env`. Desde allí genera los códigos de invitación (cada uno vale para un solo registro), ve todas las cuentas con su estado, espacio y días restantes, y puede dar más días de uso, ampliar la cuota, reprogramar el día de inicio o eliminar cuentas. Los códigos también pueden generarse por CLI con `npm run invitacion`.
+- **Organizador (admin de su evento)**: entra en la portada, crea su portal con el código de invitación y accede con su usuario y contraseña. Al entrar por primera vez fija el **día de inicio** de su evento: desde esa fecha tiene 15 días de uso (la galería avisa de los días restantes) y antes de ella puede prepararlo todo (nombre, marca de agua, QR) con la galería aún cerrada a los invitados. En su galería tiene el menú de administración: código QR, descarga en ZIP, borrado múltiple y ajustes. El candado de su galería lleva de vuelta al login.
 - **Invitados**: entran por el QR, suben fotos y ven la galería de ese evento. No necesitan cuenta y no tienen botón de descarga (salvo en archivos marcados como descargables para todos).
 
 ## 🛠️ Cómo funciona por dentro
 
 - **Cada evento es una carpeta**: `uploads/<eventId>/` guarda los archivos subidos, sus miniaturas (`.thumbs/`), las cachés de marca de agua (`.wm-thumbs/`, `.wm-display/`) y sus metadatos (`.data/settings.json`, `.data/media-meta.json`). Las cuentas viven en `uploads/.data/users.json` y los códigos de invitación pendientes en `uploads/.data/invites.json`.
 - Las **fotos se comprimen al recibirse**: se redimensionan a `IMAGE_MAX_SIDE` px y se recomprimen a JPEG. Si la versión comprimida no es más pequeña que la original, se conserva la original. La galería carga las miniaturas; el archivo completo solo se sirve al abrir el visor.
-- La **expiración es por evento**: 30 días después de la fecha que fije cada admin, su contenido se borra automáticamente. La cuenta, el nombre y la marca de agua se conservan para poder reutilizar el portal.
+- La **expiración es por cuenta**: la ventana de uso dura 15 días (ampliables por el SuperAdministrador) desde el día de inicio que fija cada organizador. Al terminar, se borran la carpeta completa del evento y la cuenta, y el código de invitación queda invalidado (se consumió al registrarse). Dos días antes se envía un email de aviso para descargar el ZIP. Fuera de la ventana, los invitados ven una página de "galería no disponible".
 - El "no poder descargar" de los invitados es **disuasorio** (sin botón de descarga, clic derecho bloqueado, `Content-Disposition: inline`). Quien puede ver un archivo en el navegador siempre puede acabar guardándolo.
 
 ## 🧰 Stack
