@@ -37,6 +37,8 @@ const settingsForm = document.getElementById('settingsForm');
 const eventNameInput = document.getElementById('eventName');
 const eventDateInput = document.getElementById('eventDate');
 const watermarkTextInput = document.getElementById('watermarkText');
+const accountEmailInput = document.getElementById('accountEmail');
+const storageBanner = document.getElementById('storageBanner');
 
 const uploadPermModal = document.getElementById('uploadPermModal');
 const uploadPermOk = document.getElementById('uploadPermOk');
@@ -83,6 +85,31 @@ async function refreshSession() {
   selectAllTop.hidden = !isAdmin;
   if (!isAdmin) state.selected.clear();
   updateSelectionBar();
+  if (isAdmin) checkStorage();
+  else storageBanner.hidden = true;
+}
+
+// ---------- Aviso de espacio casi lleno ----------
+// Se avisa al organizador desde el 80% de su cuota, para que no le pille de
+// sorpresa un rechazo de subida a mitad de un evento en directo.
+const STORAGE_WARNING_PCT = 0.8;
+
+async function checkStorage() {
+  try {
+    const res = await fetch(`${API}/admin/storage`);
+    if (!res.ok) return;
+    const { usedBytes, maxBytes, pct } = await res.json();
+    if (pct < STORAGE_WARNING_PCT) {
+      storageBanner.hidden = true;
+      return;
+    }
+    const usedGB = (usedBytes / 1024 ** 3).toFixed(1);
+    const maxGB = (maxBytes / 1024 ** 3).toFixed(1);
+    storageBanner.textContent = `⚠️ Estás usando el ${Math.round(pct * 100)}% del espacio de tu evento (${usedGB} GB de ${maxGB} GB).`;
+    storageBanner.hidden = false;
+  } catch {
+    // sin conexión: no molestamos con el aviso
+  }
 }
 
 // ---------- Nombre del evento ----------
@@ -136,6 +163,7 @@ menuSettings.addEventListener('click', async () => {
   eventNameInput.value = settings.eventName || '';
   eventDateInput.value = settings.eventDate || '';
   watermarkTextInput.value = settings.watermarkText || '';
+  accountEmailInput.value = settings.email || '';
   settingsModal.hidden = false;
 });
 
@@ -148,6 +176,7 @@ settingsForm.addEventListener('submit', async (e) => {
       eventName: eventNameInput.value,
       eventDate: eventDateInput.value || null,
       watermarkText: watermarkTextInput.value,
+      email: accountEmailInput.value,
     }),
   });
   if (res.ok) {
@@ -155,7 +184,8 @@ settingsForm.addEventListener('submit', async (e) => {
     toast('Ajustes guardados');
     loadEventInfo(); // el título de la galería puede haber cambiado
   } else {
-    toast('No se pudieron guardar los ajustes', true);
+    const { error } = await res.json().catch(() => ({}));
+    toast(error || 'No se pudieron guardar los ajustes', true);
   }
 });
 

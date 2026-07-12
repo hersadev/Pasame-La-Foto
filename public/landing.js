@@ -50,6 +50,7 @@ registerForm.addEventListener('submit', async (e) => {
   registerError.textContent = '';
   const { ok, data } = await postJson('/api/register', {
     username: document.getElementById('regUser').value,
+    email: document.getElementById('regEmail').value,
     password: document.getElementById('regPass').value,
     inviteCode: document.getElementById('regCode').value,
   });

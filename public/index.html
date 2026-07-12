@@ -33,9 +33,10 @@
       <form id="registerForm" hidden>
         <h2>Crea tu portal</h2>
         <input type="text" id="regUser" placeholder="Nombre de usuario" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="30" required />
+        <input type="email" id="regEmail" placeholder="Email" autocomplete="email" required />
         <input type="password" id="regPass" placeholder="Contraseña (mínimo 8 caracteres)" autocomplete="new-password" minlength="8" required />
         <input type="text" id="regCode" placeholder="Código de invitación" autocapitalize="characters" spellcheck="false" required />
-        <p class="field-hint">Tu portal tendrá su propia galería y su código QR para los invitados.</p>
+        <p class="field-hint">Tu portal tendrá su propia galería y su código QR para los invitados. Usaremos tu email solo si necesitas recuperar la contraseña.</p>
         <button type="submit" class="btn-gold">Crear mi portal</button>
         <p id="registerError" class="form-error"></p>
       </form>

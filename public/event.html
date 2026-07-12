@@ -47,6 +47,9 @@
     </div>
   </header>
 
+  <!-- Aviso de espacio casi lleno (admin) -->
+  <div id="storageBanner" class="storage-banner admin-only" hidden></div>
+
   <!-- Portada -->
   <section class="hero">
     <div class="hero-blob" aria-hidden="true"></div>
@@ -119,6 +122,9 @@
         <label class="field-label" for="watermarkText">Marca de agua (texto)</label>
         <input type="text" id="watermarkText" placeholder="Ej. Boda de Ana &amp; Luis" maxlength="60" />
         <p class="field-hint">Se muestra solo a los invitados al ver fotos. Déjalo vacío para no mostrar ninguna.</p>
+        <label class="field-label" for="accountEmail">Email de recuperación</label>
+        <input type="email" id="accountEmail" placeholder="tu@email.com" required />
+        <p class="field-hint">Se usa solo para recuperar tu contraseña si la olvidas.</p>
         <button type="submit" class="btn-gold">Guardar</button>
       </form>
     </div>

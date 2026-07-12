@@ -17,6 +17,7 @@
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
     "multer": "^2.0.1",
+    "nodemailer": "^9.0.3",
     "qrcode": "^1.5.3",
     "sharp": "^0.33.4"
   }
