@@ -3,7 +3,7 @@ const EVENT_BASE = location.pathname.replace(/\/+$/, ''); // "/e/x7k2m9q4ab"
 const EVENT_ID = EVENT_BASE.split('/')[2];
 const API = `/api/e/${EVENT_ID}`;
 
-const state = { items: [], isAdmin: false, viewerIndex: -1, selected: new Set() };
+const state = { items: [], isAdmin: false, viewerIndex: -1, selected: new Set(), startDate: null };
 
 const gallery = document.getElementById('gallery');
 const emptyState = document.getElementById('emptyState');
@@ -38,6 +38,7 @@ const eventNameInput = document.getElementById('eventName');
 const watermarkTextInput = document.getElementById('watermarkText');
 const accountEmailInput = document.getElementById('accountEmail');
 const usageInfo = document.getElementById('usageInfo');
+const wmPreview = document.getElementById('wmPreview');
 const storageBanner = document.getElementById('storageBanner');
 const usageBanner = document.getElementById('usageBanner');
 const addPhotosBtn = document.getElementById('addPhotosBtn');
@@ -47,6 +48,7 @@ const startDateForm = document.getElementById('startDateForm');
 const startDateInput = document.getElementById('startDateInput');
 const startDateError = document.getElementById('startDateError');
 const startDaysCount = document.getElementById('startDaysCount');
+const startDateCancel = document.getElementById('startDateCancel');
 
 const uploadPermModal = document.getElementById('uploadPermModal');
 const uploadPermOk = document.getElementById('uploadPermOk');
@@ -103,9 +105,10 @@ async function refreshSession() {
 }
 
 // ---------- Ventana de uso (día de inicio + días restantes) ----------
-// La cuenta tiene una ventana de uso limitada: si el dueño aún no ha fijado el
-// día de inicio, un modal obligatorio se lo pide; con la fecha ya fijada se
-// muestra cuántos días quedan antes del borrado definitivo.
+// Registrarse no compromete la ventana de uso: el dueño puede explorar su
+// portal sin fijar el día de inicio. El modal de fecha solo aparece cuando
+// intenta aplicar un cambio de cara a los invitados (marca de agua, nombre,
+// código QR); con la fecha ya fijada se muestran los días restantes.
 
 function fmtDay(value) {
   const date = typeof value === 'string' ? new Date(`${value}T00:00:00`) : new Date(value);
@@ -122,19 +125,16 @@ async function checkUsage() {
     const res = await fetch(`${API}/admin/settings`);
     if (!res.ok) return;
     const s = await res.json();
+    state.startDate = s.startDate;
+    startDaysCount.textContent = s.usageDays;
 
     if (!s.startDate) {
-      // Sin día de inicio no hay ventana: el modal es obligatorio
-      startDaysCount.textContent = s.usageDays;
-      startDateInput.min = todayISO();
-      startDateModal.hidden = false;
-      usageBanner.hidden = true;
+      // Sin día de inicio se puede explorar el portal con calma; la fecha se
+      // pedirá justo cuando haga falta (QR o cambios de marca de agua/nombre)
       addPhotosBtn.hidden = true;
-      return;
-    }
-
-    startDateModal.hidden = true;
-    if (!s.active) {
+      usageBanner.textContent = `👋 Explora tu portal con calma: te pediremos el día de inicio cuando actives el código QR o la marca de agua. Desde esa fecha tendrás ${s.usageDays} días de uso.`;
+      usageBanner.classList.remove('banner-warn');
+    } else if (!s.active) {
       // Fecha fijada en el futuro: se puede preparar, pero no subir todavía
       addPhotosBtn.hidden = true;
       usageBanner.textContent = `📅 Tu galería se abrirá el ${fmtDay(s.startDate)} y estará activa ${s.usageDays} días.`;
@@ -150,6 +150,25 @@ async function checkUsage() {
   }
 }
 
+// Acción que quedó a la espera de fijar el día de inicio (abrir el QR,
+// reintentar el guardado de ajustes…); se ejecuta al fijarlo con éxito.
+let pendingStartDateAction = null;
+
+function askStartDate(onFixed) {
+  pendingStartDateAction = onFixed || null;
+  startDateError.textContent = '';
+  startDateInput.min = todayISO();
+  startDateModal.hidden = false;
+}
+
+function closeStartDateModal() {
+  startDateModal.hidden = true;
+  pendingStartDateAction = null;
+}
+
+startDateCancel.addEventListener('click', closeStartDateModal);
+startDateModal.querySelector('[data-close]').addEventListener('click', closeStartDateModal);
+
 startDateForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   startDateError.textContent = '';
@@ -160,10 +179,14 @@ startDateForm.addEventListener('submit', async (e) => {
   });
   const data = await res.json().catch(() => ({}));
   if (res.ok) {
+    const action = pendingStartDateAction;
+    pendingStartDateAction = null;
     startDateModal.hidden = true;
+    state.startDate = startDateInput.value;
     toast('Día de inicio fijado');
     checkUsage();
     loadGallery(); // la galería puede haberse activado en este momento
+    if (action) action();
   } else {
     startDateError.textContent = data.error || 'No se pudo fijar el día de inicio';
   }
@@ -224,11 +247,18 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !adminMenu.hidden) adminMenu.hidden = true;
 });
 
-menuQr.addEventListener('click', () => {
-  adminMenu.hidden = true;
+function openQrModal() {
   qrImage.src = `${EVENT_BASE}/qr`;
   qrDownload.href = `${EVENT_BASE}/qr`;
   qrModal.hidden = false;
+}
+
+// El QR es lo que se imprime y reparte a los invitados: sin día de inicio
+// fijado se pide primero la fecha y, al fijarla, se abre el QR.
+menuQr.addEventListener('click', () => {
+  adminMenu.hidden = true;
+  if (!state.startDate) return askStartDate(openQrModal);
+  openQrModal();
 });
 
 menuZipAll.addEventListener('click', () => {
@@ -236,21 +266,52 @@ menuZipAll.addEventListener('click', () => {
   window.location.href = `${API}/admin/zip?all=1`;
 });
 
+// ---------- Vista previa de la marca de agua ----------
+// Imagen borrador generada en el servidor con el mismo SVG que ven los
+// invitados: se refresca (con un pequeño retardo) mientras se escribe el texto.
+
+let wmPreviewTimer;
+
+function refreshWmPreview() {
+  wmPreview.src = `${API}/admin/wm-preview?text=${encodeURIComponent(watermarkTextInput.value.trim())}`;
+  wmPreview.hidden = false;
+}
+
+watermarkTextInput.addEventListener('input', () => {
+  clearTimeout(wmPreviewTimer);
+  wmPreviewTimer = setTimeout(refreshWmPreview, 400);
+});
+
+// Valores de nombre y marca de agua tal y como llegaron del servidor, para
+// saber si el guardado cambia algo de cara a los invitados.
+let loadedEventName = '';
+let loadedWatermark = '';
+
 menuSettings.addEventListener('click', async () => {
   adminMenu.hidden = true;
   const res = await fetch(`${API}/admin/settings`);
   const settings = await res.json();
-  eventNameInput.value = settings.eventName || '';
-  watermarkTextInput.value = settings.watermarkText || '';
+  loadedEventName = settings.eventName || '';
+  loadedWatermark = settings.watermarkText || '';
+  eventNameInput.value = loadedEventName;
+  watermarkTextInput.value = loadedWatermark;
   accountEmailInput.value = settings.email || '';
   usageInfo.textContent = settings.startDate
     ? `Tu ventana de uso empieza el ${fmtDay(settings.startDate)} y termina el ${fmtDay(settings.expiresAt)} (${settings.usageDays} días). Después se eliminarán las fotos y la cuenta.`
-    : 'Todavía no has fijado el día de inicio de tu evento.';
+    : 'Todavía no has fijado el día de inicio: te lo pediremos al guardar cambios del evento o al activar el código QR.';
+  refreshWmPreview();
   settingsModal.hidden = false;
 });
 
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+  // Guardar cambios del evento (nombre, marca de agua) estrena la ventana de
+  // uso: sin día de inicio se pide la fecha y, al fijarla, se reintenta este
+  // mismo guardado. El servidor lo comprueba igualmente (START_DATE_REQUIRED).
+  const changesEvent = eventNameInput.value !== loadedEventName || watermarkTextInput.value !== loadedWatermark;
+  if (changesEvent && !state.startDate) {
+    return askStartDate(() => settingsForm.requestSubmit());
+  }
   const res = await fetch(`${API}/admin/settings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -265,8 +326,12 @@ settingsForm.addEventListener('submit', async (e) => {
     toast('Ajustes guardados');
     loadEventInfo(); // el título de la galería puede haber cambiado
   } else {
-    const { error } = await res.json().catch(() => ({}));
-    toast(error || 'No se pudieron guardar los ajustes', true);
+    const data = await res.json().catch(() => ({}));
+    if (data.code === 'START_DATE_REQUIRED') {
+      askStartDate(() => settingsForm.requestSubmit());
+    } else {
+      toast(data.error || 'No se pudieron guardar los ajustes', true);
+    }
   }
 });
 
