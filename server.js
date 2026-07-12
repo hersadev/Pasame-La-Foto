@@ -113,6 +113,32 @@ const zipLimiter = rateLimit({
   message: { error: 'Demasiadas descargas, prueba de nuevo en unos minutos' },
 });
 
+// Tope de subidas por IP. La subida no exige sesión (los invitados suben sin
+// registrarse, por diseño) y cada petición cuesta disco + CPU de sharp, así que
+// sin freno un script podría inundar el servidor. El límite es holgado a
+// propósito: en un evento real muchos invitados comparten la misma IP pública
+// (el WiFi del local), y cada petición admite hasta 20 archivos, así que 200
+// peticiones cada 10 min dan margen de sobra al uso legítimo mientras cortan un
+// flujo automatizado de miles de peticiones.
+const uploadLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas subidas seguidas, prueba de nuevo en unos minutos' },
+});
+
+// Máximo 20 intentos de restablecer contraseña por IP cada 15 minutos. El token
+// es de 256 bits (imposible de adivinar), pero el límite evita usar esta ruta
+// como martillo de lecturas de disco sin coste para el atacante.
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados intentos, prueba de nuevo más tarde' },
+});
+
 // ---------- Usuarios y eventos ----------
 // Cada cuenta tiene su evento: los archivos viven en uploads/<eventId>/ y la
 // estructura interna replica la del proyecto original (miniaturas, cachés de
@@ -163,11 +189,21 @@ function writeInvites(codes) {
   writeJson(INVITES_PATH, codes);
 }
 
-// eventId del usuario con sesión iniciada (o null)
+// eventId del usuario con sesión iniciada (o null).
+// La sesión viaja firmada en la cookie, sin estado en el servidor, así que no se
+// puede "revocar" una cookie ya emitida. Para poder cerrar sesión en todos los
+// dispositivos y expulsar a un atacante tras un cambio de contraseña, cada cuenta
+// lleva un `sessionEpoch`: la cookie guarda el epoch con el que se emitió y aquí
+// se rechaza si no coincide con el actual. Incrementar el epoch (logout / reset)
+// invalida de golpe cualquier cookie anterior. Las cuentas y cookies antiguas sin
+// epoch valen 0 en ambos lados, así que un despliegue no desloguea a nadie válido.
 function sessionEventId(req) {
   const username = req.session.user;
   if (!username) return null;
-  return readUsers()[username]?.eventId || null;
+  const account = readUsers()[username];
+  if (!account) return null;
+  if ((req.session.epoch || 0) !== (account.sessionEpoch || 0)) return null;
+  return account.eventId || null;
 }
 
 function isEventAdmin(req, eventId) {
@@ -234,7 +270,12 @@ function mediaType(filename) {
 }
 
 function safeFilePath(ev, name) {
-  // Evita path traversal: el archivo debe existir dentro del evento
+  // El nombre debe ser un archivo suelto de la raíz del evento, nunca una ruta:
+  // así se descartan travesías (../) y, sobre todo, los accesos a las subcarpetas
+  // ocultas del evento (.data, .thumbs, .wm-*) donde viven metadatos y ajustes.
+  // Express decodifica %2f a "/" en los parámetros, por lo que un "basename"
+  // distinto del nombre recibido delata un intento de bajar de directorio.
+  if (typeof name !== 'string' || name !== path.basename(name) || name.startsWith('.')) return null;
   const resolved = path.resolve(ev.dir, name);
   if (!resolved.startsWith(ev.dir + path.sep)) return null;
   return resolved;
@@ -519,10 +560,11 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 
   const eventId = newEventId();
   createEventDirs(eventDirs(eventId));
-  users[user] = { passwordHash, eventId, email: userEmail, createdAt: Date.now() };
+  users[user] = { passwordHash, eventId, email: userEmail, createdAt: Date.now(), sessionEpoch: 1 };
   writeUsers(users);
   writeInvites(invites.filter((c) => c !== code)); // el código se consume
   req.session.user = user;
+  req.session.epoch = 1;
   res.json({ ok: true, eventId });
 });
 
@@ -534,12 +576,24 @@ app.post('/api/login', loginLimiter, async (req, res) => {
     typeof password === 'string' && (await bcrypt.compare(password, account ? account.passwordHash : DUMMY_HASH));
   if (account && validPassword) {
     req.session.user = user;
+    req.session.epoch = account.sessionEpoch || 0;
     return res.json({ ok: true, eventId: account.eventId });
   }
   res.status(401).json({ error: 'Credenciales incorrectas' });
 });
 
 app.post('/api/logout', (req, res) => {
+  // Además de borrar la cookie de este navegador, se sube el epoch de la cuenta
+  // para invalidar cualquier otra sesión abierta (o una cookie robada): "cerrar
+  // sesión" debe expulsar de verdad, no solo en el dispositivo actual.
+  const username = req.session.user;
+  if (username) {
+    const users = readUsers();
+    if (users[username]) {
+      users[username].sessionEpoch = (users[username].sessionEpoch || 0) + 1;
+      writeUsers(users);
+    }
+  }
   req.session = null;
   res.json({ ok: true });
 });
@@ -575,7 +629,7 @@ app.post('/api/forgot-password', forgotPasswordLimiter, async (req, res) => {
   res.json(genericResponse);
 });
 
-app.post('/api/reset-password', async (req, res) => {
+app.post('/api/reset-password', resetPasswordLimiter, async (req, res) => {
   const { token, password } = req.body || {};
   if (typeof password !== 'string' || password.length < 8) {
     return res.status(400).json({ error: 'La contraseña debe tener al menos 8 caracteres' });
@@ -594,9 +648,13 @@ app.post('/api/reset-password', async (req, res) => {
   account.passwordHash = await bcrypt.hash(password, 12);
   delete account.resetTokenHash;
   delete account.resetTokenExpires;
+  // Cambiar la contraseña cierra cualquier sesión anterior (p.ej. la del atacante
+  // que forzó el reset o una cookie robada); esta petición estrena epoch.
+  account.sessionEpoch = (account.sessionEpoch || 0) + 1;
   writeUsers(users);
 
   req.session.user = username;
+  req.session.epoch = account.sessionEpoch;
   res.json({ ok: true, eventId: account.eventId });
 });
 
@@ -626,7 +684,7 @@ app.get('/api/e/:eventId/info', loadEvent, (req, res) => {
 });
 
 // Subir uno o varios archivos (las imágenes se comprimen al recibirlas)
-app.post('/api/e/:eventId/upload', loadEvent, checkTotalSpace, upload.array('files', 20), async (req, res, next) => {
+app.post('/api/e/:eventId/upload', uploadLimiter, loadEvent, checkTotalSpace, upload.array('files', 20), async (req, res, next) => {
   try {
     const downloadable = req.body.downloadable === 'all' ? 'all' : 'admin';
     const meta = readMediaMeta(req.event);
@@ -673,7 +731,9 @@ app.get('/api/e/:eventId/media', loadEvent, (req, res) => {
 
 // Servir una miniatura (con marca de agua para invitados si está configurada)
 app.get('/e/:eventId/thumbs/:name', loadEvent, async (req, res) => {
-  const resolved = path.resolve(req.event.thumbs, req.params.name);
+  const name = req.params.name;
+  if (name !== path.basename(name) || name.startsWith('.')) return res.status(404).end();
+  const resolved = path.resolve(req.event.thumbs, name);
   if (!resolved.startsWith(req.event.thumbs + path.sep) || !fs.existsSync(resolved)) return res.status(404).end();
   await sendMaybeWatermarked(req, res, req.event, resolved, req.event.wmThumbs);
 });
