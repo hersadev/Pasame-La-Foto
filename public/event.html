@@ -124,6 +124,8 @@
         <label class="field-label" for="watermarkText">Marca de agua (texto)</label>
         <input type="text" id="watermarkText" placeholder="Ej. Boda de Ana &amp; Luis" maxlength="60" />
         <p class="field-hint">Se muestra solo a los invitados al ver fotos. Déjalo vacío para no mostrar ninguna.</p>
+        <img id="wmPreview" class="wm-preview" alt="Vista previa de la marca de agua" hidden />
+        <p class="field-hint">Vista previa sobre una imagen de ejemplo: así la verán tus invitados en cada foto.</p>
         <label class="field-label" for="accountEmail">Email de recuperación</label>
         <input type="email" id="accountEmail" placeholder="tu@email.com" required />
         <p class="field-hint">Se usa solo para recuperar tu contraseña si la olvidas.</p>
@@ -154,17 +156,18 @@
     </div>
   </div>
 
-  <!-- Modal obligatorio: fijar el día de inicio (sin botón de cerrar) -->
+  <!-- Modal para fijar el día de inicio: se abre al aplicar cambios (marca de agua, QR) -->
   <div id="startDateModal" class="modal" hidden>
-    <div class="modal-backdrop"></div>
+    <div class="modal-backdrop" data-close></div>
     <div class="modal-sheet">
       <h2>Elige el día de inicio</h2>
-      <p class="confirm-text">Tu portal estará activo durante <strong id="startDaysCount">15</strong> días desde la fecha que elijas. Al terminar ese plazo se eliminarán definitivamente todas las fotos y tu cuenta, y tu código de invitación quedará invalidado.</p>
+      <p class="confirm-text">Para activar esta parte del evento necesitas fijar el día de inicio. Tu portal estará activo durante <strong id="startDaysCount">15</strong> días desde la fecha que elijas; al terminar ese plazo se eliminarán definitivamente todas las fotos y tu cuenta.</p>
       <form id="startDateForm">
         <label class="field-label" for="startDateInput">Día de inicio</label>
         <input type="date" id="startDateInput" required />
         <p class="field-hint">A partir de ese día tus invitados podrán ver y subir fotos. Esta fecha no se puede cambiar después: elígela con calma.</p>
         <button type="submit" class="btn-gold">Fijar día de inicio</button>
+        <button type="button" id="startDateCancel" class="btn-ghost">Ahora no</button>
         <p id="startDateError" class="form-error"></p>
       </form>
     </div>

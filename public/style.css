@@ -581,6 +581,11 @@ body.selecting .fab {
   border-radius: 28px 28px 0 0;
   padding: 1.9rem 1.6rem calc(2rem + env(safe-area-inset-bottom));
   animation: sheetUp 0.3s ease;
+  /* Los modales largos (ajustes con la vista previa) no deben cortarse:
+     la hoja nunca supera la ventana y su contenido hace scroll interno */
+  max-height: calc(100dvh - 1.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 @keyframes sheetUp {
@@ -649,6 +654,17 @@ body.selecting .fab {
   font-size: 0.78rem;
   color: var(--muted);
   margin-top: -0.4rem;
+}
+
+/* Visor de la imagen borrador con la marca de agua (modal de ajustes) */
+.wm-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
 }
 
 /* ============ Modal de permiso de descarga ============ */

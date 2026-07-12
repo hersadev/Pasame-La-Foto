@@ -276,6 +276,22 @@ function requireEventAdmin(req, res, next) {
   res.status(401).json({ error: 'No autorizado' });
 }
 
+// Registrarse no compromete la ventana de uso: el organizador puede explorar
+// su portal sin fijar el día de inicio. Solo al "publicar" algo de cara a los
+// invitados (código QR, marca de agua, nombre del evento) se le exige fijarlo;
+// el frontend reconoce el código START_DATE_REQUIRED y abre el modal de fecha.
+function startDateRequired(res) {
+  return res
+    .status(409)
+    .json({ error: 'Antes de continuar, fija el día de inicio de tu evento', code: 'START_DATE_REQUIRED' });
+}
+
+function requireStartDate(req, res, next) {
+  const account = readUsers()[req.session.user];
+  if (account?.startDate) return next();
+  startDateRequired(res);
+}
+
 // ---------- Subida de archivos ----------
 
 // Whitelist cerrada de mimetype -> extensión: el nombre final en disco nunca
@@ -388,6 +404,21 @@ function deleteMedia(ev, name) {
   return true;
 }
 
+// SVG del texto de la marca de agua, con el mismo aspecto en las fotos reales
+// y en la vista previa del panel de ajustes.
+function watermarkSvg(width, height, text) {
+  const fontSize = Math.max(12, Math.round((width || 800) * 0.032));
+  const escaped = String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+    <text x="${width - 14}" y="${height - 14}" text-anchor="end" font-family="'Playfair Display', serif"
+      font-style="italic" font-size="${fontSize}" fill="white" fill-opacity="0.9"
+      style="paint-order: stroke; stroke: rgba(0,0,0,0.5); stroke-width: ${Math.max(1, fontSize * 0.06)}px">${escaped}</text>
+  </svg>`;
+}
+
 // Genera (o reutiliza de caché) una versión con marca de agua de texto.
 // La caché se invalida sola si el settings.json del evento es más reciente.
 async function getWatermarked(ev, sourcePath, cacheDir) {
@@ -399,16 +430,7 @@ async function getWatermarked(ev, sourcePath, cacheDir) {
   const { watermarkText } = readSettings(ev);
   const image = sharp(sourcePath);
   const { width, height } = await image.metadata();
-  const fontSize = Math.max(12, Math.round((width || 800) * 0.032));
-  const escaped = String(watermarkText)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-    <text x="${width - 14}" y="${height - 14}" text-anchor="end" font-family="'Playfair Display', serif"
-      font-style="italic" font-size="${fontSize}" fill="white" fill-opacity="0.9"
-      style="paint-order: stroke; stroke: rgba(0,0,0,0.5); stroke-width: ${Math.max(1, fontSize * 0.06)}px">${escaped}</text>
-  </svg>`;
+  const svg = watermarkSvg(width, height, watermarkText);
   await image.composite([{ input: Buffer.from(svg) }]).toFile(cachedPath);
   return cachedPath;
 }
@@ -624,7 +646,7 @@ app.post('/api/register', registerLimiter, async (req, res) => {
     email: userEmail,
     createdAt: Date.now(),
     sessionEpoch: 1,
-    startDate: null, // el día de inicio se fija desde el portal (modal obligatorio)
+    startDate: null, // se pedirá desde el portal al aplicar cambios (marca de agua, QR)
     usageDays: DEFAULT_USAGE_DAYS,
   };
   writeUsers(users);
@@ -934,9 +956,17 @@ app.post('/api/e/:eventId/admin/settings', loadEvent, requireEventAdmin, (req, r
     return res.status(400).json({ error: 'Introduce un email válido para la recuperación de contraseña' });
   }
   const settings = readSettings(req.event);
+  const newWatermark = String(watermarkText || '').slice(0, 80);
+  const newName = String(eventName || '').slice(0, 60);
+  // Cambiar lo que ven los invitados (nombre, marca de agua) exige tener fijado
+  // el día de inicio; actualizar solo el email de recuperación no lo exige.
+  const changesEvent = newWatermark !== (settings.watermarkText || '') || newName !== (settings.eventName || '');
+  if (changesEvent && !readUsers()[req.session.user]?.startDate) {
+    return startDateRequired(res);
+  }
   settings.eventDate = eventDate || null;
-  settings.watermarkText = String(watermarkText || '').slice(0, 80);
-  settings.eventName = String(eventName || '').slice(0, 60);
+  settings.watermarkText = newWatermark;
+  settings.eventName = newName;
   writeSettings(req.event, settings);
 
   const users = readUsers();
@@ -947,10 +977,56 @@ app.post('/api/e/:eventId/admin/settings', loadEvent, requireEventAdmin, (req, r
   res.json({ ok: true });
 });
 
+// ---------- Vista previa de la marca de agua ----------
+// Imagen "borrador" para que el organizador vea cómo quedará la marca de agua
+// antes de guardarla: una escena neutra generada con sharp (no hay que
+// empaquetar ninguna foto) sobre la que se estampa el mismo SVG que se aplica
+// a las fotos reales. No exige día de inicio: es justo lo que ayuda a decidir.
+
+const PREVIEW_W = 900;
+const PREVIEW_H = 600;
+let previewBasePromise = null;
+
+function previewBase() {
+  if (!previewBasePromise) {
+    const scene = `<svg width="${PREVIEW_W}" height="${PREVIEW_H}" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#f7e8d3"/>
+          <stop offset="0.55" stop-color="#f0cda2"/>
+          <stop offset="1" stop-color="#e6b686"/>
+        </linearGradient>
+      </defs>
+      <rect width="${PREVIEW_W}" height="${PREVIEW_H}" fill="url(#sky)"/>
+      <circle cx="450" cy="330" r="95" fill="#faf3e6" fill-opacity="0.9"/>
+      <ellipse cx="210" cy="530" rx="430" ry="160" fill="#caa06e" fill-opacity="0.75"/>
+      <ellipse cx="730" cy="575" rx="470" ry="175" fill="#b3854f" fill-opacity="0.85"/>
+    </svg>`;
+    previewBasePromise = sharp(Buffer.from(scene)).jpeg({ quality: 85 }).toBuffer();
+  }
+  return previewBasePromise;
+}
+
+app.get('/api/e/:eventId/admin/wm-preview', loadEvent, requireEventAdmin, async (req, res, next) => {
+  try {
+    const text = String(req.query.text || '').slice(0, 80);
+    let image = sharp(await previewBase());
+    if (text) {
+      image = image.composite([{ input: Buffer.from(watermarkSvg(PREVIEW_W, PREVIEW_H, text)) }]);
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('jpeg').send(await image.jpeg({ quality: 85 }).toBuffer());
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ---------- Código QR del evento ----------
 
-// PNG con el QR que apunta a la galería del evento (la base se configura con PUBLIC_URL)
-app.get('/e/:eventId/qr', loadEvent, requireEventAdmin, async (req, res) => {
+// PNG con el QR que apunta a la galería del evento (la base se configura con
+// PUBLIC_URL). Exige el día de inicio: el QR es lo que se imprime y reparte,
+// y sin ventana de uso llevaría a una galería que nunca abre.
+app.get('/e/:eventId/qr', loadEvent, requireEventAdmin, requireStartDate, async (req, res) => {
   const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
   const png = await QRCode.toBuffer(`${base}/e/${req.event.id}`, { width: 600, margin: 2 });
   res.type('png').send(png);
