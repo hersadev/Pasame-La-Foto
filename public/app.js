@@ -25,6 +25,7 @@ const menuQr = document.getElementById('menuQr');
 const menuZipAll = document.getElementById('menuZipAll');
 const menuSettings = document.getElementById('menuSettings');
 const menuLogout = document.getElementById('menuLogout');
+const menuExit = document.getElementById('menuExit');
 const selectAllTop = document.getElementById('selectAllTop');
 const selectAllTopLabel = document.getElementById('selectAllTopLabel');
 const qrModal = document.getElementById('qrModal');
@@ -164,6 +165,12 @@ menuLogout.addEventListener('click', async () => {
   await refreshSession();
   await loadGallery(); // re-pide la lista: las URLs de fotos cambian según el rol
   toast('Sesión cerrada');
+});
+
+menuExit.addEventListener('click', async () => {
+  adminMenu.hidden = true;
+  await fetch('/api/logout', { method: 'POST' });
+  location.href = '/';
 });
 
 // Cerrar modales tocando el fondo
