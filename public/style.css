@@ -1124,9 +1124,78 @@ body.landing-body {
   color: var(--accent-dark);
 }
 
-.cell-sub {
+/* Filas desplegables: la fila principal pliega/despliega la de detalles */
+
+.user-row {
+  cursor: pointer;
+}
+
+.user-row:hover td {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.th-toggle {
+  width: 2.2rem;
+}
+
+.row-toggle {
+  border: none;
+  background: none;
+  cursor: pointer;
   color: var(--muted);
-  font-size: 0.8rem;
+  font-size: 0.95rem;
+  padding: 0.2rem 0.45rem;
+  transition: transform 0.2s ease;
+}
+
+.user-row.row-open .row-toggle {
+  transform: rotate(180deg);
+}
+
+.user-row.row-open td {
+  border-bottom: none;
+}
+
+.user-details > td {
+  background: var(--surface);
+  padding: 0.9rem 1rem;
+}
+
+.details-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.details-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 2rem;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.detail-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.detail-space {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.detail-track {
+  width: 160px;
+  height: 6px;
 }
 
 .cell-actions {
