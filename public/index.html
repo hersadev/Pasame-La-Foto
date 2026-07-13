@@ -14,6 +14,12 @@
 </head>
 <body class="landing-body lp-body">
 
+  <!-- Aviso al volver de la página de pago de Stripe (?compra=exito|cancelada) -->
+  <div id="purchaseBanner" class="lp-banner" hidden>
+    <p id="purchaseBannerText"></p>
+    <button type="button" id="purchaseBannerClose" class="lp-banner-close" aria-label="Cerrar aviso">×</button>
+  </div>
+
   <header class="topbar lp-header">
     <a href="#top" class="brand lp-brand-link">Pásame la foto</a>
     <nav class="lp-nav">
@@ -59,6 +65,9 @@
 
     <!-- ============ Cómo funciona ============ -->
     <section id="como-funciona" class="lp-section">
+      <div class="lp-blob lp-blob-sage lp-blob-left lp-blob-1" aria-hidden="true"></div>
+      <div class="lp-blob lp-blob-peach lp-blob-right lp-blob-2" aria-hidden="true"></div>
+      <div class="lp-blob lp-blob-sage lp-blob-left lp-blob-3" aria-hidden="true"></div>
       <h2 class="lp-heading">Cómo funciona</h2>
       <p class="lp-sub">De cero a galería llena, en cuatro pasos.</p>
 
@@ -68,7 +77,7 @@
             <span class="lp-step-num" aria-hidden="true">1</span>
             <h3>Consigue tu código y crea tu portal</h3>
             <p>
-              Escríbenos para contratar el servicio y te enviamos por email un código de invitación
+              Compra tu galería con pago seguro y recibe al momento, por email, un código de invitación
               de un solo uso. Con él creas tu cuenta y tu galería queda lista en un minuto.
             </p>
           </div>
@@ -163,20 +172,47 @@
 
     <!-- ============ Contratar ============ -->
     <section id="contratar" class="lp-section">
+      <div class="lp-blob lp-blob-peach lp-blob-right lp-blob-4" aria-hidden="true"></div>
+      <div class="lp-blob lp-blob-sage lp-blob-left lp-blob-5" aria-hidden="true"></div>
       <h2 class="lp-heading">Contrata tu galería</h2>
-      <p class="lp-sub">Un evento, una galería privada. Nos escribes, te enviamos tu código y en minutos está funcionando.</p>
+      <p class="lp-sub">Elige el tamaño de tu evento, paga con tarjeta y recibe tu código de invitación por email al momento.</p>
+
+      <div class="lp-plans">
+        <article class="lp-card lp-plan">
+          <h3>Galería Básica</h3>
+          <p class="lp-plan-price">20 €<span>pago único</span></p>
+          <ul class="lp-includes lp-plan-perks">
+            <li><strong>3 GB</strong> de espacio: cientos y cientos de fotos</li>
+            <li><strong>15 días</strong> de galería activa desde tu día de inicio</li>
+            <li>El día 16, las fotos se borran del servidor</li>
+          </ul>
+          <button type="button" class="btn-gold lp-block-btn" data-plan="basico">Comprar por 20 €</button>
+        </article>
+
+        <article class="lp-card lp-plan lp-plan-featured">
+          <span class="lp-plan-badge">Más espacio y más días</span>
+          <h3>Galería Grande</h3>
+          <p class="lp-plan-price">30 €<span>pago único</span></p>
+          <ul class="lp-includes lp-plan-perks">
+            <li><strong>5 GB</strong> de espacio para eventos grandes</li>
+            <li><strong>25 días</strong> de galería activa desde tu día de inicio</li>
+            <li>El día 26, las fotos se borran del servidor</li>
+          </ul>
+          <button type="button" class="btn-gold lp-block-btn" data-plan="grande">Comprar por 30 €</button>
+        </article>
+      </div>
+      <p class="field-hint lp-hint-center">Pago seguro con Stripe. Los días no empiezan a contar hasta que tú fijes el día de inicio de tu evento.</p>
 
       <div class="lp-hire">
         <div class="lp-card lp-includes-card">
-          <h3>Todo esto incluye</h3>
+          <h3>Los dos planes incluyen</h3>
           <ul class="lp-includes">
             <li>Galería privada con su propio enlace y código QR</li>
             <li>Los invitados suben fotos sin apps ni registros</li>
             <li>Marca de agua personalizada en las fotos que ven los invitados</li>
             <li>Tú decides qué fotos se pueden descargar</li>
             <li>Descarga completa en ZIP con un clic</li>
-            <li>15 días de galería activa, ampliables si lo necesitas</li>
-            <li>Espacio de sobra para miles de fotos</li>
+            <li>Tú eliges el día de inicio: hasta entonces no corre el plazo</li>
             <li>Al caducar, todo se borra: nada se queda en internet</li>
           </ul>
         </div>
@@ -184,11 +220,11 @@
         <aside class="lp-card lp-hire-cta">
           <h3>Así de fácil</h3>
           <ol class="lp-hire-steps">
-            <li>Nos escribes contándonos tu evento</li>
-            <li>Te mandamos tu código de invitación por email</li>
+            <li>Elige tu plan y paga con tarjeta</li>
+            <li>Recibes tu código de invitación por email al momento</li>
             <li>Creas tu portal y compartes el QR</li>
           </ol>
-          <a href="#contacto" class="btn-gold lp-block-btn" data-topic="contratar">Solicitar mi código</a>
+          <a href="#contacto" class="btn-ghost lp-block-btn" data-topic="contratar">¿Prefieres escribirnos? Contacta</a>
           <a href="#acceso" class="link-btn lp-link-center" data-auth="register">¿Ya tienes un código? Crea tu portal</a>
         </aside>
       </div>
@@ -196,6 +232,7 @@
 
     <!-- ============ Contacto ============ -->
     <section id="contacto" class="lp-section">
+      <div class="lp-blob lp-blob-cream lp-blob-right lp-blob-6" aria-hidden="true"></div>
       <h2 class="lp-heading">Escríbenos</h2>
       <p class="lp-sub">¿Quieres contratar o tienes alguna duda? Te respondemos por email.</p>
 
@@ -225,6 +262,7 @@
 
     <!-- ============ Acceso ============ -->
     <section id="acceso" class="lp-section lp-acceso">
+      <div class="lp-blob lp-blob-peach lp-blob-left lp-blob-7" aria-hidden="true"></div>
       <h2 class="lp-heading">Tu cuenta</h2>
       <p class="lp-sub">Entra en tu portal o crea uno con tu código de invitación.</p>
 
