@@ -41,7 +41,7 @@ if (!SESSION_SECRET) {
 
 // Límites y compresión (configurables en .env)
 const MAX_FILE_MB = parseInt(process.env.MAX_FILE_MB || '100', 10); // por archivo
-const MAX_TOTAL_GB = parseFloat(process.env.MAX_TOTAL_GB || '5'); // total por evento
+const MAX_TOTAL_GB = parseFloat(process.env.MAX_TOTAL_GB || '3'); // total por evento
 // Tope global de todos los eventos. Opcional: sin definir (o 'auto'), el límite
 // se calcula del espacio libre real del disco; con cifra, actúa como techo fijo.
 const MAX_GLOBAL_GB = parseFloat(process.env.MAX_GLOBAL_GB); // NaN = automático

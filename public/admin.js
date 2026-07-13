@@ -233,6 +233,40 @@ async function patchUser(username, body, okMsg) {
   }
 }
 
+function detailItem(label, value) {
+  const item = document.createElement('div');
+  item.className = 'detail-item';
+  const dt = document.createElement('span');
+  dt.className = 'detail-label';
+  dt.textContent = label;
+  let dd = value;
+  if (!(value instanceof Node)) {
+    dd = document.createElement('span');
+    dd.textContent = value;
+  }
+  item.append(dt, dd);
+  return item;
+}
+
+// Espacio usado de la cuenta con su propia barra (misma rampa que la global)
+function spaceDetail(u) {
+  const pct = Math.min(100, Math.round((u.usedBytes / (u.quotaGB * 1024 ** 3)) * 100));
+  const wrap = document.createElement('div');
+  wrap.className = 'detail-space';
+  const text = document.createElement('span');
+  text.textContent = `${fmtGB(u.usedBytes)} de ${u.quotaGB} GB (${pct}%)`;
+  const track = document.createElement('div');
+  track.className = `storage-track detail-track${pct >= 80 ? ' storage-warn' : ''}`;
+  const fill = document.createElement('div');
+  fill.className = 'storage-fill';
+  fill.style.width = `${pct}%`;
+  track.appendChild(fill);
+  wrap.append(text, track);
+  return wrap;
+}
+
+const openRows = new Set(); // usuarios con el desplegable abierto (sobrevive a las recargas de la lista)
+
 async function loadUsers() {
   const users = await api('/users');
   usersBody.innerHTML = '';
@@ -240,14 +274,12 @@ async function loadUsers() {
 
   for (const u of users) {
     const tr = document.createElement('tr');
+    tr.className = 'user-row';
 
     const tdUser = document.createElement('td');
     const name = document.createElement('strong');
     name.textContent = u.username;
-    const email = document.createElement('div');
-    email.className = 'cell-sub';
-    email.textContent = u.email;
-    tdUser.append(name, email);
+    tdUser.appendChild(name);
 
     const tdEvent = document.createElement('td');
     const link = document.createElement('a');
@@ -265,17 +297,51 @@ async function loadUsers() {
     tdStatus.appendChild(chip);
 
     const tdDays = document.createElement('td');
-    tdDays.textContent = u.startDate
-      ? `${fmtDay(u.startDate)} → ${fmtDay(u.expiresAt)} (${u.usageDays} días)`
-      : `${u.usageDays} días (sin empezar)`;
+    tdDays.textContent = `${u.usageDays} día${u.usageDays === 1 ? '' : 's'}`;
 
     const tdSpace = document.createElement('td');
     tdSpace.textContent = `${fmtGB(u.usedBytes)} de ${u.quotaGB} GB`;
 
-    const tdActions = document.createElement('td');
-    tdActions.className = 'cell-actions';
-    tdActions.append(
-      actionBtn('Días', 'btn-ghost', async () => {
+    const tdToggle = document.createElement('td');
+    tdToggle.className = 'cell-toggle';
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'row-toggle';
+    toggleBtn.setAttribute('aria-expanded', 'false');
+    toggleBtn.setAttribute('aria-label', `Detalles de ${u.username}`);
+    toggleBtn.textContent = '▾';
+    tdToggle.appendChild(toggleBtn);
+
+    tr.append(tdUser, tdEvent, tdStatus, tdDays, tdSpace, tdToggle);
+
+    // Fila desplegable: datos completos de la cuenta y sus acciones
+    const detailsTr = document.createElement('tr');
+    detailsTr.className = 'user-details';
+    detailsTr.hidden = true;
+    const detailsTd = document.createElement('td');
+    detailsTd.colSpan = 6;
+
+    const gallery = document.createElement('a');
+    gallery.href = `/e/${u.eventId}`;
+    gallery.target = '_blank';
+    gallery.rel = 'noopener';
+    gallery.textContent = u.eventId;
+
+    const info = document.createElement('div');
+    info.className = 'details-grid';
+    info.append(
+      detailItem('Email', u.email || '—'),
+      detailItem('Galería del evento', gallery),
+      detailItem('Cuenta creada', fmtDay(u.createdAt)),
+      detailItem('Día de inicio', u.startDate ? fmtDay(u.startDate) : 'Sin fijar'),
+      detailItem('Caduca', u.startDate ? `${fmtDay(u.expiresAt)}${u.active ? ` (quedan ${u.daysLeft} día${u.daysLeft === 1 ? '' : 's'})` : ''}` : '—'),
+      detailItem('Días de uso', `${u.usageDays} día${u.usageDays === 1 ? '' : 's'}`),
+      detailItem('Espacio', spaceDetail(u))
+    );
+
+    const actions = document.createElement('div');
+    actions.className = 'cell-actions';
+    actions.append(
+      actionBtn('Modificar días', 'btn-ghost', async () => {
         const value = await promptDialog({
           title: 'Días de uso',
           message: `Días de uso totales para "${u.username}" (ahora ${u.usageDays}).`,
@@ -285,7 +351,7 @@ async function loadUsers() {
         if (value === null) return;
         patchUser(u.username, { usageDays: value }, 'Días de uso actualizados');
       }),
-      actionBtn('Espacio', 'btn-ghost', async () => {
+      actionBtn('Modificar espacio', 'btn-ghost', async () => {
         const value = await promptDialog({
           title: 'Cuota de espacio',
           message: `Cuota en GB para "${u.username}" (ahora ${u.quotaGB} GB).`,
@@ -295,7 +361,7 @@ async function loadUsers() {
         if (value === null) return;
         patchUser(u.username, { quotaGB: value }, 'Cuota actualizada');
       }),
-      actionBtn('Inicio', 'btn-ghost', async () => {
+      actionBtn('Modificar inicio', 'btn-ghost', async () => {
         const value = await promptDialog({
           title: 'Día de inicio',
           message: `Día de inicio para "${u.username}". Déjalo vacío para que vuelva a elegirlo.`,
@@ -305,7 +371,7 @@ async function loadUsers() {
         if (value === null) return;
         patchUser(u.username, { startDate: value.trim() || null }, 'Día de inicio actualizado');
       }),
-      actionBtn('Eliminar', 'btn-danger', async () => {
+      actionBtn('Eliminar cuenta', 'btn-danger', async () => {
         if (!(await confirmDialog(`¿Eliminar la cuenta "${u.username}" y TODAS las fotos de su evento? Esta acción no se puede deshacer.`, 'Eliminar'))) return;
         try {
           await api(`/users/${encodeURIComponent(u.username)}`, { method: 'DELETE' });
@@ -318,8 +384,26 @@ async function loadUsers() {
       })
     );
 
-    tr.append(tdUser, tdEvent, tdStatus, tdDays, tdSpace, tdActions);
-    usersBody.appendChild(tr);
+    const panel = document.createElement('div');
+    panel.className = 'details-panel';
+    panel.append(info, actions);
+    detailsTd.appendChild(panel);
+    detailsTr.appendChild(detailsTd);
+
+    const setOpen = (open) => {
+      detailsTr.hidden = !open;
+      tr.classList.toggle('row-open', open);
+      toggleBtn.setAttribute('aria-expanded', String(open));
+      if (open) openRows.add(u.username);
+      else openRows.delete(u.username);
+    };
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('a')) return; // el enlace al evento no pliega/despliega
+      setOpen(detailsTr.hidden);
+    });
+    if (openRows.has(u.username)) setOpen(true);
+
+    usersBody.append(tr, detailsTr);
   }
 }
 
