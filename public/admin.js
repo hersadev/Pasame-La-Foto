@@ -20,6 +20,75 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => (toastEl.hidden = true), 3200);
 }
 
+// ---------- Modales (sustituyen a confirm() y prompt() del navegador) ----------
+// Cada uno devuelve una promesa: el confirm resuelve a true/false y el
+// prompt al texto introducido o null (Cancelar / fondo / Escape).
+
+const confirmModal = document.getElementById('confirmModal');
+const confirmText = document.getElementById('confirmText');
+const confirmOk = document.getElementById('confirmOk');
+
+let confirmResolve = null;
+
+function confirmDialog(message, okLabel = 'Confirmar') {
+  confirmText.textContent = message;
+  confirmOk.textContent = okLabel;
+  confirmModal.hidden = false;
+  return new Promise((resolve) => (confirmResolve = resolve));
+}
+
+function settleConfirm(value) {
+  if (!confirmResolve) return;
+  confirmModal.hidden = true;
+  confirmResolve(value);
+  confirmResolve = null;
+}
+
+confirmOk.addEventListener('click', () => settleConfirm(true));
+document.getElementById('confirmCancel').addEventListener('click', () => settleConfirm(false));
+confirmModal.querySelector('[data-close]').addEventListener('click', () => settleConfirm(false));
+
+const promptModal = document.getElementById('promptModal');
+const promptTitle = document.getElementById('promptTitle');
+const promptText = document.getElementById('promptText');
+const promptInput = document.getElementById('promptInput');
+
+let promptResolve = null;
+
+function promptDialog({ title, message, value = '', type = 'text', placeholder = '' }) {
+  promptTitle.textContent = title;
+  promptText.textContent = message;
+  promptInput.type = type;
+  if (type === 'number') promptInput.step = 'any';
+  else promptInput.removeAttribute('step');
+  promptInput.placeholder = placeholder;
+  promptInput.value = value;
+  promptModal.hidden = false;
+  promptInput.focus();
+  promptInput.select();
+  return new Promise((resolve) => (promptResolve = resolve));
+}
+
+function settlePrompt(value) {
+  if (!promptResolve) return;
+  promptModal.hidden = true;
+  promptResolve(value);
+  promptResolve = null;
+}
+
+document.getElementById('promptForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  settlePrompt(promptInput.value);
+});
+document.getElementById('promptCancel').addEventListener('click', () => settlePrompt(null));
+promptModal.querySelector('[data-close]').addEventListener('click', () => settlePrompt(null));
+
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!confirmModal.hidden) settleConfirm(false);
+  if (!promptModal.hidden) settlePrompt(null);
+});
+
 async function api(path, options = {}) {
   const res = await fetch(`/api/sa${path}`, {
     headers: options.body ? { 'Content-Type': 'application/json' } : {},
@@ -76,7 +145,7 @@ async function loadInvites() {
     revokeBtn.className = 'btn-danger btn-compact';
     revokeBtn.textContent = 'Revocar';
     revokeBtn.addEventListener('click', async () => {
-      if (!confirm(`¿Revocar el código ${code}? Nadie podrá registrarse con él.`)) return;
+      if (!(await confirmDialog(`¿Revocar el código ${code}? Nadie podrá registrarse con él.`, 'Revocar'))) return;
       try {
         await api(`/invites/${encodeURIComponent(code)}`, { method: 'DELETE' });
         toast('Código revocado');
@@ -184,26 +253,38 @@ async function loadUsers() {
     const tdActions = document.createElement('td');
     tdActions.className = 'cell-actions';
     tdActions.append(
-      actionBtn('Días', 'btn-ghost', () => {
-        const value = prompt(`Días de uso totales para "${u.username}" (ahora ${u.usageDays}):`, u.usageDays);
+      actionBtn('Días', 'btn-ghost', async () => {
+        const value = await promptDialog({
+          title: 'Días de uso',
+          message: `Días de uso totales para "${u.username}" (ahora ${u.usageDays}).`,
+          value: u.usageDays,
+          type: 'number',
+        });
         if (value === null) return;
         patchUser(u.username, { usageDays: value }, 'Días de uso actualizados');
       }),
-      actionBtn('Espacio', 'btn-ghost', () => {
-        const value = prompt(`Cuota en GB para "${u.username}" (ahora ${u.quotaGB} GB):`, u.quotaGB);
+      actionBtn('Espacio', 'btn-ghost', async () => {
+        const value = await promptDialog({
+          title: 'Cuota de espacio',
+          message: `Cuota en GB para "${u.username}" (ahora ${u.quotaGB} GB).`,
+          value: u.quotaGB,
+          type: 'number',
+        });
         if (value === null) return;
         patchUser(u.username, { quotaGB: value }, 'Cuota actualizada');
       }),
-      actionBtn('Inicio', 'btn-ghost', () => {
-        const value = prompt(
-          `Día de inicio para "${u.username}" (AAAA-MM-DD, vacío para que vuelva a elegirlo):`,
-          u.startDate || ''
-        );
+      actionBtn('Inicio', 'btn-ghost', async () => {
+        const value = await promptDialog({
+          title: 'Día de inicio',
+          message: `Día de inicio para "${u.username}". Déjalo vacío para que vuelva a elegirlo.`,
+          value: u.startDate || '',
+          type: 'date',
+        });
         if (value === null) return;
         patchUser(u.username, { startDate: value.trim() || null }, 'Día de inicio actualizado');
       }),
       actionBtn('Eliminar', 'btn-danger', async () => {
-        if (!confirm(`¿Eliminar la cuenta "${u.username}" y TODAS las fotos de su evento? Esta acción no se puede deshacer.`)) return;
+        if (!(await confirmDialog(`¿Eliminar la cuenta "${u.username}" y TODAS las fotos de su evento? Esta acción no se puede deshacer.`, 'Eliminar'))) return;
         try {
           await api(`/users/${encodeURIComponent(u.username)}`, { method: 'DELETE' });
           toast('Usuario eliminado');

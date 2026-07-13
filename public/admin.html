@@ -68,6 +68,35 @@
     </section>
   </main>
 
+  <!-- Modal de confirmación (sustituye al confirm() del navegador) -->
+  <div id="confirmModal" class="modal modal-confirm" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-sheet modal-center">
+      <h2>¿Estás seguro?</h2>
+      <p id="confirmText" class="confirm-text"></p>
+      <div class="confirm-actions">
+        <button id="confirmCancel" class="btn-ghost">Cancelar</button>
+        <button id="confirmOk" class="btn-danger">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal con campo de texto (sustituye al prompt() del navegador) -->
+  <div id="promptModal" class="modal modal-confirm" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-sheet modal-center">
+      <h2 id="promptTitle"></h2>
+      <p id="promptText" class="confirm-text"></p>
+      <form id="promptForm">
+        <input id="promptInput" type="text" autocomplete="off" />
+        <div class="confirm-actions">
+          <button type="button" id="promptCancel" class="btn-ghost">Cancelar</button>
+          <button type="submit" class="btn-gold">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Aviso (toast) -->
   <div id="toast" class="toast" hidden></div>
 
