@@ -112,7 +112,7 @@ function showLogin() {
 async function showPanel() {
   loginView.hidden = true;
   panelView.hidden = false;
-  await Promise.all([loadInvites(), loadUsers()]);
+  await Promise.all([loadInvites(), loadStorage(), loadUsers()]);
 }
 
 // ---------- Códigos de invitación ----------
@@ -170,11 +170,33 @@ document.getElementById('genInvite').addEventListener('click', async () => {
   }
 });
 
+// ---------- Almacenamiento global ----------
+
+const storageChip = document.getElementById('storageChip');
+const storageMeter = document.getElementById('storageMeter');
+const storageFill = document.getElementById('storageFill');
+
+const STORAGE_WARN_PCT = 0.8;
+
+async function loadStorage() {
+  const { totalBytes, usedBytes, freeBytes, pct } = await api('/storage');
+  const percent = Math.round(pct * 100);
+  const warn = pct >= STORAGE_WARN_PCT;
+  storageFill.style.width = `${percent}%`;
+  storageMeter.classList.toggle('storage-warn', warn);
+  storageMeter.setAttribute('aria-valuenow', percent);
+  storageChip.textContent = `${percent}% ocupado`;
+  storageChip.className = `chip ${warn ? 'chip-warn' : 'chip-ok'}`;
+  document.getElementById('storageUsed').textContent = fmtGB(usedBytes);
+  document.getElementById('storageFree').textContent = fmtGB(freeBytes);
+  document.getElementById('storageTotal').textContent = fmtGB(totalBytes);
+}
+
 // ---------- Usuarios ----------
 
 function fmtGB(bytes) {
   const gb = bytes / 1024 ** 3;
-  if (gb >= 0.1) return `${gb.toFixed(1)} GB`;
+  if (gb >= 0.1) return `${+gb.toFixed(1)} GB`;
   return `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
@@ -289,6 +311,7 @@ async function loadUsers() {
           await api(`/users/${encodeURIComponent(u.username)}`, { method: 'DELETE' });
           toast('Usuario eliminado');
           loadUsers();
+          loadStorage();
         } catch (err) {
           toast(err.message, true);
         }

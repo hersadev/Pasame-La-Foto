@@ -43,6 +43,21 @@
 
       <div class="admin-card">
         <div class="admin-card-head">
+          <h2>Almacenamiento</h2>
+          <span id="storageChip" class="chip chip-muted">—</span>
+        </div>
+        <div id="storageMeter" class="storage-track" role="meter" aria-label="Espacio del servidor ocupado" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="storageFill" class="storage-fill"></div>
+        </div>
+        <div class="storage-stats">
+          <span><strong id="storageUsed">—</strong> ocupado</span>
+          <span><strong id="storageFree">—</strong> disponible</span>
+          <span><strong id="storageTotal">—</strong> en total</span>
+        </div>
+      </div>
+
+      <div class="admin-card">
+        <div class="admin-card-head">
           <h2>Usuarios</h2>
           <button id="reloadBtn" class="btn-ghost btn-compact">Recargar</button>
         </div>

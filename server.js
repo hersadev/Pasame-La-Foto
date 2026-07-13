@@ -42,7 +42,10 @@ if (!SESSION_SECRET) {
 // Límites y compresión (configurables en .env)
 const MAX_FILE_MB = parseInt(process.env.MAX_FILE_MB || '100', 10); // por archivo
 const MAX_TOTAL_GB = parseFloat(process.env.MAX_TOTAL_GB || '5'); // total por evento
-const MAX_GLOBAL_GB = parseFloat(process.env.MAX_GLOBAL_GB || '15'); // total de todos los eventos (disco compartido)
+// Tope global de todos los eventos. Opcional: sin definir (o 'auto'), el límite
+// se calcula del espacio libre real del disco; con cifra, actúa como techo fijo.
+const MAX_GLOBAL_GB = parseFloat(process.env.MAX_GLOBAL_GB); // NaN = automático
+const DISK_RESERVE_GB = parseFloat(process.env.DISK_RESERVE_GB || '2'); // franja del disco que las fotos nunca ocupan
 const IMAGE_MAX_SIDE = parseInt(process.env.IMAGE_MAX_SIDE || '2560', 10); // lado mayor tras comprimir
 const IMAGE_QUALITY = parseInt(process.env.IMAGE_QUALITY || '82', 10); // calidad JPEG
 const THUMB_SIZE = 480; // miniaturas de la galería
@@ -485,6 +488,24 @@ function totalUploadsSize() {
   return total;
 }
 
+// Límite global en bytes para las fotos: lo ya ocupado más el espacio libre
+// real del disco donde vive uploads/, menos una reserva para que el sistema
+// (logs, actualizaciones) nunca se quede sin sitio. Se consulta el disco en
+// cada uso, así que ampliarlo en el servidor se refleja sin reiniciar. Si
+// MAX_GLOBAL_GB está en el .env, actúa además como techo fijo.
+function globalLimitBytes(usedBytes) {
+  let limit = Infinity;
+  try {
+    const st = fs.statfsSync(UPLOAD_DIR);
+    limit = usedBytes + Math.max(0, st.bavail * st.bsize - DISK_RESERVE_GB * 1024 ** 3);
+  } catch {
+    // sin statfs en este sistema de archivos: queda el techo del .env
+  }
+  if (!Number.isNaN(MAX_GLOBAL_GB)) limit = Math.min(limit, MAX_GLOBAL_GB * 1024 ** 3);
+  if (!Number.isFinite(limit)) limit = 15 * 1024 ** 3; // último recurso: el tope histórico
+  return limit;
+}
+
 // Cuota de un evento en GB: la general, salvo que el SuperAdministrador le
 // haya concedido más espacio a esa cuenta en concreto.
 function eventQuotaGB(eventId) {
@@ -506,7 +527,7 @@ function checkTotalSpace(req, res, next) {
   }
 
   const globalUsed = totalUploadsSize();
-  if (globalUsed + incoming > MAX_GLOBAL_GB * 1024 ** 3) {
+  if (globalUsed + incoming > globalLimitBytes(globalUsed)) {
     return res.status(507).json({ error: 'El almacenamiento del servidor está lleno por ahora, inténtalo más tarde' });
   }
 
@@ -1074,6 +1095,19 @@ app.post('/api/sa/logout', (req, res) => {
 app.get('/api/sa/me', (req, res) => {
   if (!SUPERADMIN_ENABLED) return res.status(404).json({ error: 'No encontrado' });
   res.json({ superadmin: !!req.session.superadmin });
+});
+
+// Almacenamiento global del servidor: total (disco real menos la reserva,
+// con MAX_GLOBAL_GB como techo si está definido), ocupado y libre
+app.get('/api/sa/storage', requireSuperadmin, (req, res) => {
+  const usedBytes = totalUploadsSize();
+  const totalBytes = globalLimitBytes(usedBytes);
+  res.json({
+    totalBytes,
+    usedBytes,
+    freeBytes: Math.max(0, totalBytes - usedBytes),
+    pct: totalBytes > 0 ? Math.min(1, usedBytes / totalBytes) : 1,
+  });
 });
 
 // Cuentas registradas, con su ventana de uso y el espacio que ocupan
