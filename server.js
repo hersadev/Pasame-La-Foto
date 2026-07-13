@@ -31,6 +31,11 @@ const SUPERADMIN_USER = process.env.SUPERADMIN_USER || '';
 const SUPERADMIN_PASSWORD = process.env.SUPERADMIN_PASSWORD || '';
 const SUPERADMIN_ENABLED = Boolean(SUPERADMIN_USER && SUPERADMIN_PASSWORD);
 
+// Buzón del formulario de contacto de la landing. Si el SMTP está configurado,
+// SMTP_USER existe siempre, así que el fallback garantiza destinatario; sin
+// SMTP, el mailer imprime el mensaje en el log (útil en local).
+const CONTACT_EMAIL = (process.env.CONTACT_EMAIL || process.env.SMTP_USER || '').trim();
+
 // Sin valores por defecto: un despliegue con el .env a medio configurar
 // no debe arrancar con un secreto de sesión adivinable.
 const SESSION_SECRET = process.env.SESSION_SECRET;
@@ -110,6 +115,16 @@ const forgotPasswordLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Demasiadas solicitudes, prueba de nuevo más tarde' },
+});
+
+// Máximo 5 mensajes de contacto por IP cada hora: cada envío acaba en el
+// buzón del SuperAdministrador, así que conviene frenar el spam de raíz.
+const contactLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados mensajes seguidos, prueba de nuevo más tarde' },
 });
 
 // Máximo 20 descargas ZIP por IP cada 15 minutos: el ZIP empaqueta en directo
@@ -771,6 +786,40 @@ app.get('/api/me', (req, res) => {
   const username = req.session.user || null;
   const eventId = sessionEventId(req);
   res.json({ user: eventId ? username : null, eventId });
+});
+
+// ---------- Contacto (landing) ----------
+
+// Formulario público de la landing: el mensaje llega por email al buzón del
+// SuperAdministrador (CONTACT_EMAIL) con reply-to del remitente, para poder
+// responder —por ejemplo con un código de invitación— desde el propio correo.
+app.post('/api/contact', contactLimiter, async (req, res) => {
+  const body = req.body || {};
+  // Sin saltos de línea en lo que viaja en cabeceras (asunto): nodemailer ya
+  // las sanea, pero mejor que un nombre raro no ensucie el asunto del correo.
+  const name = String(body.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const email = String(body.email || '').trim().toLowerCase();
+  const message = String(body.message || '').trim().slice(0, 2000);
+  const topic = body.topic === 'contratar' ? 'Quiere contratar el servicio' : 'Consulta general';
+
+  if (!name) return res.status(400).json({ error: 'Dinos tu nombre para poder responderte' });
+  if (!EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: 'Introduce un email válido: es donde te responderemos' });
+  }
+  if (message.length < 10) return res.status(400).json({ error: 'Cuéntanos algo más en el mensaje' });
+
+  try {
+    await sendMail({
+      to: CONTACT_EMAIL,
+      replyTo: email,
+      subject: `Contacto web: ${topic} — ${name}`,
+      text: `Nombre: ${name}\nEmail: ${email}\nMotivo: ${topic}\n\n${message}`,
+    });
+  } catch (err) {
+    console.error('Error enviando el mensaje de contacto:', err.message);
+    return res.status(500).json({ error: 'No se pudo enviar el mensaje, inténtalo de nuevo más tarde' });
+  }
+  res.json({ ok: true });
 });
 
 // ---------- Página y API pública del evento (invitados) ----------

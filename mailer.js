@@ -14,12 +14,12 @@ const transporter = configured
     })
   : null;
 
-async function sendMail({ to, subject, text }) {
+async function sendMail({ to, subject, text, replyTo }) {
   if (!transporter) {
     console.log(`[mailer] SMTP no configurado. Correo para ${to}:\n${subject}\n${text}`);
     return;
   }
-  await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, text });
+  await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, text, replyTo });
 }
 
 module.exports = { sendMail };
