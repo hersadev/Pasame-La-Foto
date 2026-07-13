@@ -1089,6 +1089,37 @@ body.landing-body {
   letter-spacing: 0.06em;
 }
 
+/* Plan y origen del código (chips entre el código y sus botones) */
+.invite-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+/* Selector de plan + botón de generar, en la cabecera de la tarjeta */
+.invite-gen {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.invite-gen select {
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.invite-gen select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* --- Tabla de usuarios --- */
 
 .table-scroll {
@@ -1317,19 +1348,73 @@ body.landing-body {
   }
 }
 
-/* La landing ocupa todo el ancho: cada sección centra su propia columna */
+/* La landing ocupa todo el ancho: cada sección centra su propia columna.
+   El recorte lateral (clip, sin crear scroll) permite que los círculos
+   decorativos de las secciones sangren por los bordes de la pantalla. */
 .lp {
   max-width: none;
   padding: 0;
+  overflow-x: hidden; /* respaldo para navegadores sin overflow: clip */
+  overflow-x: clip;
 }
 
 .lp-section {
+  position: relative; /* ancla de sus círculos decorativos */
   max-width: 1000px;
   margin: 0 auto;
   padding: 3.6rem 1.4rem 0;
   /* Que la barra fija no tape el título al llegar desde un ancla */
   scroll-margin-top: 4.6rem;
 }
+
+/* --- Círculos decorativos de las secciones --- */
+/* El mismo recurso del hero repartido a lo largo de la página, para que el
+   fondo acompañe al hacer scroll. Cada círculo vive dentro de su sección
+   (top en % de la altura de esa sección, así sigue a su contenido en
+   cualquier ancho) y se desplaza del borde de la columna centrada al borde
+   real del viewport con calc((100vw - 100%) / -2), sangrando --bleed píxeles
+   por fuera; .lp lo recorta sin scroll horizontal. */
+
+.lp-blob {
+  position: absolute;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  filter: blur(2px);
+  z-index: -1;
+}
+
+.lp-blob-sage {
+  background: color-mix(in srgb, var(--accent-2) 24%, transparent);
+}
+
+.lp-blob-peach {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.lp-blob-cream {
+  background: color-mix(in srgb, #fff 58%, transparent);
+}
+
+.lp-blob-left {
+  left: calc((100vw - 100%) / -2 - var(--bleed, 80px));
+}
+
+.lp-blob-right {
+  right: calc((100vw - 100%) / -2 - var(--bleed, 80px));
+}
+
+/* Cómo funciona (sección larga: tres círculos alternando lados) */
+.lp-blob-1 { width: clamp(170px, 22vw, 260px); top: 11%; --bleed: 70px; }
+.lp-blob-2 { width: clamp(220px, 28vw, 330px); top: 44%; --bleed: 110px; }
+.lp-blob-3 { width: clamp(150px, 18vw, 220px); top: 77%; --bleed: 60px; }
+
+/* Contratar: uno junto a los planes y otro junto a lo incluido */
+.lp-blob-4 { width: clamp(190px, 24vw, 280px); top: 5%; --bleed: 90px; }
+.lp-blob-5 { width: clamp(210px, 26vw, 300px); top: 60%; --bleed: 95px; }
+
+/* Contacto y Tu cuenta */
+.lp-blob-6 { width: clamp(160px, 20vw, 230px); top: 32%; --bleed: 60px; }
+.lp-blob-7 { width: clamp(200px, 25vw, 280px); top: 34%; --bleed: 85px; }
 
 .lp-heading {
   font-family: var(--serif);
@@ -1384,6 +1469,17 @@ body.landing-body {
   overflow: hidden;
   text-align: center;
   padding: 4rem 1.4rem 3.2rem;
+}
+
+/* Los círculos decorativos del fondo del hero sangran por los bordes laterales
+   de la pantalla (recorte natural). El melocotón hereda de la antigua pantalla
+   de login un ancla al borde inferior; aquí ese borde cae en mitad de la página
+   y el overflow:hidden lo cortaba en seco con una línea recta: se ancla a media
+   altura para que solo lo recorte el borde derecho. */
+.lp-hero .landing-blob-2 {
+  bottom: auto;
+  top: clamp(150px, 26vw, 320px);
+  right: -85px;
 }
 
 .lp-title {
@@ -1941,6 +2037,114 @@ a.link-btn {
 
 .lp-link-center {
   margin-top: 0.9rem;
+}
+
+/* --- Planes de compra --- */
+
+.lp-plans {
+  display: grid;
+  gap: 1.3rem;
+  max-width: 860px;
+  margin: 2.2rem auto 0.9rem;
+}
+
+@media (min-width: 720px) {
+  .lp-plans {
+    grid-template-columns: 1fr 1fr;
+    align-items: stretch;
+  }
+}
+
+.lp-plan {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  text-align: left;
+}
+
+.lp-plan h3 {
+  margin-bottom: 0;
+}
+
+/* La lista de ventajas empuja el botón al pie: los dos botones quedan alineados */
+.lp-plan-perks {
+  flex: 1;
+}
+
+.lp-plan-price {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  font-family: var(--serif);
+  font-size: 2.4rem;
+  line-height: 1;
+  color: var(--accent-dark);
+}
+
+.lp-plan-price span {
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.lp-plan-featured {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+}
+
+.lp-plan-badge {
+  position: absolute;
+  top: -0.8rem;
+  right: 1.2rem;
+  padding: 0.3rem 0.85rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* --- Aviso al volver de la página de pago --- */
+
+.lp-banner {
+  position: fixed;
+  top: 0.9rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 80; /* por encima de la barra superior (z-index 50) */
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  width: min(92vw, 560px);
+  padding: 0.9rem 1.1rem;
+  background: color-mix(in srgb, var(--accent-2) 16%, #fff);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 45%, var(--line));
+  border-radius: 18px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.16);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.lp-banner p {
+  flex: 1;
+}
+
+.lp-banner-warn {
+  background: color-mix(in srgb, var(--danger) 10%, #fff);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+}
+
+.lp-banner-close {
+  align-self: flex-start;
+  font-size: 1.3rem;
+  line-height: 1;
+  padding: 0.15rem 0.3rem;
+  color: var(--muted);
+  cursor: pointer;
 }
 
 /* --- Contacto --- */

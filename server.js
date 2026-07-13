@@ -12,6 +12,7 @@ const sharp = require('sharp');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcryptjs');
+const Stripe = require('stripe');
 const { sendMail } = require('./mailer');
 
 const app = express();
@@ -21,6 +22,7 @@ const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(UPLOAD_DIR, '.data');
 const USERS_PATH = path.join(DATA_DIR, 'users.json');
 const INVITES_PATH = path.join(DATA_DIR, 'invites.json');
+const PURCHASES_PATH = path.join(DATA_DIR, 'purchases.json');
 const DEFAULT_USAGE_DAYS = 15; // ventana de uso desde el día de inicio que fija el usuario
 const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
 const IS_HTTPS = PUBLIC_URL.startsWith('https://');
@@ -35,6 +37,30 @@ const SUPERADMIN_ENABLED = Boolean(SUPERADMIN_USER && SUPERADMIN_PASSWORD);
 // SMTP_USER existe siempre, así que el fallback garantiza destinatario; sin
 // SMTP, el mailer imprime el mensaje en el log (útil en local).
 const CONTACT_EMAIL = (process.env.CONTACT_EMAIL || process.env.SMTP_USER || '').trim();
+
+// Compra directa con Stripe. Con las dos claves en el .env, la landing vende
+// los planes con pago con tarjeta y el webhook envía el código por email; sin
+// ellas, la compra queda desactivada y la contratación sigue siendo por el
+// formulario de contacto. Se exigen las dos a la vez: cobrar sin webhook
+// dejaría pagos hechos sin código entregado.
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+const STRIPE_ENABLED = Boolean(STRIPE_SECRET_KEY && STRIPE_WEBHOOK_SECRET);
+const stripe = STRIPE_ENABLED ? new Stripe(STRIPE_SECRET_KEY) : null;
+if (!STRIPE_ENABLED && (STRIPE_SECRET_KEY || STRIPE_WEBHOOK_SECRET)) {
+  console.warn(
+    'Stripe a medio configurar: hacen falta STRIPE_SECRET_KEY y STRIPE_WEBHOOK_SECRET a la vez. La compra directa queda desactivada.'
+  );
+}
+
+// Planes a la venta. Lo que se cobra y lo que concede cada código (espacio y
+// días de uso) sale siempre de esta tabla: la usan el pago con Stripe, el
+// generador de códigos del panel de SuperAdministrador y la landing (que solo
+// muestra estos datos, nunca los decide).
+const PLANS = {
+  basico: { name: 'Galería Básica', quotaGB: 3, usageDays: 15, priceCents: 1500 },
+  grande: { name: 'Galería Grande', quotaGB: 5, usageDays: 25, priceCents: 2000 },
+};
 
 // Sin valores por defecto: un despliegue con el .env a medio configurar
 // no debe arrancar con un secreto de sesión adivinable.
@@ -74,6 +100,35 @@ app.use(
     },
   })
 );
+// Webhook de Stripe: la firma se verifica sobre el cuerpo en crudo, así que la
+// ruta se registra ANTES de express.json() (que lo consumiría). Aquí llega la
+// confirmación real del pago —la vuelta del navegador a la landing es solo
+// cosmética— y de aquí sale el código de invitación hacia el email del
+// comprador. checkout.session.completed cubre el pago con tarjeta;
+// async_payment_succeeded, los métodos que confirman más tarde.
+app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!STRIPE_ENABLED) return res.status(404).json({ error: 'No encontrado' });
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], STRIPE_WEBHOOK_SECRET);
+  } catch {
+    return res.status(400).json({ error: 'Firma no válida' });
+  }
+  const isPaymentEvent =
+    event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded';
+  if (isPaymentEvent && event.data.object.payment_status === 'paid') {
+    try {
+      await fulfillPurchase(event.data.object, req);
+    } catch (err) {
+      // Con un 500, Stripe reintenta el webhook: fulfillPurchase es idempotente
+      // y el reintento retoma justo lo que faltó (p.ej. solo el email).
+      console.error(`Error atendiendo el pago ${event.data.object.id}:`, err.message);
+      return res.status(500).json({ error: 'Error interno' });
+    }
+  }
+  res.json({ received: true });
+});
+
 app.use(express.json());
 // event.html solo tiene sentido bajo /e/<id> (app.js saca el evento de la URL)
 app.get('/event.html', (req, res) => res.redirect('/'));
@@ -125,6 +180,16 @@ const contactLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Demasiados mensajes seguidos, prueba de nuevo más tarde' },
+});
+
+// Máximo 10 inicios de compra por IP cada 15 minutos: cada uno crea una sesión
+// de pago en Stripe, así que conviene frenar a un script que las genere en masa.
+const checkoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados intentos de compra, prueba de nuevo en unos minutos' },
 });
 
 // Máximo 20 descargas ZIP por IP cada 15 minutos: el ZIP empaqueta en directo
@@ -211,6 +276,29 @@ function readInvites() {
 
 function writeInvites(codes) {
   writeJson(INVITES_PATH, codes);
+}
+
+// invites.json guarda una lista mixta: los códigos antiguos son una cadena
+// suelta y los nuevos un objeto con el plan que conceden ({ code, quotaGB,
+// usageDays, source, email, createdAt }). Las cadenas siguen valiendo y se
+// registran con los valores por defecto, como siempre.
+function inviteCodeOf(entry) {
+  return typeof entry === 'string' ? entry : entry.code;
+}
+
+function findInvite(invites, code) {
+  return invites.find((entry) => inviteCodeOf(entry) === code) || null;
+}
+
+// Registro de compras con Stripe, indexado por id de sesión de Checkout: da
+// idempotencia a los webhooks (Stripe puede repetirlos) y deja al
+// SuperAdministrador el histórico con el código y el email de cada comprador.
+function readPurchases() {
+  return readJson(PURCHASES_PATH, {});
+}
+
+function writePurchases(purchases) {
+  writeJson(PURCHASES_PATH, purchases);
 }
 
 // eventId del usuario con sesión iniciada (o null).
@@ -651,7 +739,7 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 
   // Pre-chequeo para no gastar el hash con datos inválidos. No es autoritativo:
   // se vuelve a validar dentro de la sección crítica de abajo.
-  if (!readInvites().includes(code)) {
+  if (!findInvite(readInvites(), code)) {
     return res.status(403).json({ error: 'Código de invitación no válido' });
   }
   if (readUsers()[user]) {
@@ -666,7 +754,8 @@ app.post('/api/register', registerLimiter, async (req, res) => {
   const passwordHash = await bcrypt.hash(password, 12);
 
   const invites = readInvites();
-  if (!invites.includes(code)) {
+  const invite = findInvite(invites, code);
+  if (!invite) {
     return res.status(403).json({ error: 'Código de invitación no válido' });
   }
   const users = readUsers();
@@ -676,6 +765,9 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 
   const eventId = newEventId();
   createEventDirs(eventDirs(eventId));
+  // El plan del código (si lo lleva) fija los días de uso y la cuota de la
+  // cuenta; los códigos antiguos, sin plan, conservan los valores por defecto.
+  const plan = typeof invite === 'string' ? {} : invite;
   users[user] = {
     passwordHash,
     eventId,
@@ -683,10 +775,11 @@ app.post('/api/register', registerLimiter, async (req, res) => {
     createdAt: Date.now(),
     sessionEpoch: 1,
     startDate: null, // se pedirá desde el portal al aplicar cambios (marca de agua, QR)
-    usageDays: DEFAULT_USAGE_DAYS,
+    usageDays: plan.usageDays || DEFAULT_USAGE_DAYS,
   };
+  if (plan.quotaGB) users[user].quotaGB = plan.quotaGB;
   writeUsers(users);
-  writeInvites(invites.filter((c) => c !== code)); // el código se consume
+  writeInvites(invites.filter((entry) => inviteCodeOf(entry) !== code)); // el código se consume
   req.session.user = user;
   req.session.epoch = 1;
   res.json({ ok: true, eventId });
@@ -821,6 +914,152 @@ app.post('/api/contact', contactLimiter, async (req, res) => {
   }
   res.json({ ok: true });
 });
+
+// ---------- Compra directa (Stripe Checkout) ----------
+// El comprador elige plan en la landing y paga en la página de Stripe: el
+// servidor solo crea la sesión de pago y, cuando el webhook confirma el cobro,
+// genera el código de invitación y lo envía por email. La tarjeta nunca pasa
+// por aquí.
+
+// Planes a la venta y si la compra directa está activa (lo consulta la landing
+// para decidir si los botones compran o llevan al formulario de contacto)
+app.get('/api/plans', (req, res) => {
+  res.json({
+    enabled: STRIPE_ENABLED,
+    plans: Object.entries(PLANS).map(([id, plan]) => ({
+      id,
+      name: plan.name,
+      priceEur: plan.priceCents / 100,
+      quotaGB: plan.quotaGB,
+      usageDays: plan.usageDays,
+    })),
+  });
+});
+
+// Crea la sesión de pago y devuelve la URL de la página de Stripe. El email no
+// se pide aquí: lo recoge la propia página de pago y llega en el webhook.
+app.post('/api/checkout', checkoutLimiter, async (req, res) => {
+  if (!STRIPE_ENABLED) return res.status(404).json({ error: 'No encontrado' });
+  const planKey = String((req.body || {}).plan || '');
+  const plan = PLANS[planKey];
+  if (!plan) return res.status(400).json({ error: 'Plan no válido' });
+  const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: 'eur',
+            unit_amount: plan.priceCents,
+            product_data: {
+              name: `Pásame la foto — ${plan.name}`,
+              description: `${plan.quotaGB} GB de espacio y ${plan.usageDays} días de galería para tu evento. Recibirás tu código de invitación en tu email.`,
+            },
+          },
+        },
+      ],
+      metadata: { plan: planKey },
+      success_url: `${base}/?compra=exito`,
+      cancel_url: `${base}/?compra=cancelada#contratar`,
+      locale: 'es',
+    });
+    res.json({ url: session.url });
+  } catch (err) {
+    console.error('Error creando la sesión de pago:', err.message);
+    res.status(500).json({ error: 'No se pudo iniciar el pago, inténtalo de nuevo en unos minutos' });
+  }
+});
+
+// Atiende un pago confirmado (lo llama el webhook): crea el código de
+// invitación con el plan comprado, lo apunta en purchases.json y lo envía por
+// email. Idempotente por sesión de pago: un webhook repetido no genera códigos
+// ni correos duplicados y, si solo falló el email, el reintento de Stripe
+// reintenta únicamente el envío (el código ya creado se reutiliza).
+const fulfillingSessions = new Set(); // frena webhooks duplicados que lleguen a la vez
+
+async function fulfillPurchase(session, req) {
+  const planKey = session.metadata?.plan;
+  const plan = PLANS[planKey];
+  if (!plan) throw new Error(`plan desconocido "${planKey}"`);
+  if (fulfillingSessions.has(session.id)) return;
+  fulfillingSessions.add(session.id);
+  try {
+    const purchases = readPurchases();
+    let purchase = purchases[session.id];
+    if (purchase?.emailedAt) return; // compra ya atendida del todo
+
+    const email = purchase?.email || session.customer_details?.email || '';
+    if (!purchase) {
+      const code = newInviteCode();
+      const invites = readInvites();
+      invites.push({
+        code,
+        quotaGB: plan.quotaGB,
+        usageDays: plan.usageDays,
+        source: 'stripe',
+        email,
+        createdAt: Date.now(),
+      });
+      writeInvites(invites);
+      purchase = {
+        plan: planKey,
+        code,
+        email,
+        amountTotal: session.amount_total,
+        createdAt: Date.now(),
+        emailedAt: null,
+      };
+      purchases[session.id] = purchase;
+      writePurchases(purchases);
+      console.log(`Compra ${session.id}: ${plan.name} para ${email || 'sin email'}, código ${purchase.code}`);
+    }
+
+    // Sin email (no debería pasar: la página de pago lo exige) no hay a quién
+    // escribir; el código queda visible en el panel para entregarlo a mano.
+    if (!email) {
+      console.error(`Compra ${session.id} sin email de comprador: entrega el código ${purchase.code} a mano desde /admin.`);
+      return;
+    }
+
+    const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+    await sendMail({
+      to: email,
+      replyTo: CONTACT_EMAIL || undefined,
+      subject: 'Tu código de invitación — Pásame la foto',
+      text: `¡Gracias por tu compra!
+
+Aquí tienes tu código de invitación, de un solo uso:
+
+    ${purchase.code}
+
+Tu ${plan.name} incluye:
+- ${plan.quotaGB} GB de espacio para las fotos de tu evento
+- ${plan.usageDays} días de galería desde el día de inicio que tú fijes (al terminar, las fotos y la cuenta se borran del servidor)
+
+Para crear tu portal:
+1. Entra en ${base}/#acceso
+2. Pulsa «¿Tienes un código de invitación? Crea tu portal»
+3. Elige tu usuario y contraseña e introduce el código
+
+Los días no empiezan a contar hasta que fijes el día de inicio desde tu portal: puedes crear tu cuenta hoy y dejarlo todo preparado con calma.
+
+Si necesitas ayuda, responde a este correo y te echamos una mano.
+
+¡Que disfrutes tu evento!
+— Pásame la foto`,
+    });
+
+    // El envío se apunta releyendo el archivo: el sello de "email enviado" no
+    // debe perderse aunque otra compra haya escrito entre medias.
+    const latest = readPurchases();
+    latest[session.id] = { ...purchase, emailedAt: Date.now() };
+    writePurchases(latest);
+  } finally {
+    fulfillingSessions.delete(session.id);
+  }
+}
 
 // ---------- Página y API pública del evento (invitados) ----------
 
@@ -1229,9 +1468,23 @@ app.delete('/api/sa/users/:username', requireSuperadmin, (req, res) => {
   res.json({ ok: true });
 });
 
-// Códigos de invitación sin usar
+// Códigos de invitación sin usar, con el plan que concede cada uno (los
+// antiguos, guardados como cadena suelta, se muestran con los valores por
+// defecto, que es lo que aplicará el registro al canjearlos)
 app.get('/api/sa/invites', requireSuperadmin, (req, res) => {
-  res.json(readInvites());
+  res.json(
+    readInvites().map((entry) => {
+      const inv = typeof entry === 'string' ? { code: entry } : entry;
+      return {
+        code: inv.code,
+        quotaGB: inv.quotaGB || MAX_TOTAL_GB,
+        usageDays: inv.usageDays || DEFAULT_USAGE_DAYS,
+        source: inv.source || 'manual',
+        email: inv.email || null,
+        createdAt: inv.createdAt || null,
+      };
+    })
+  );
 });
 
 // Generar un código nuevo (mismo formato que scripts/invitacion.js)
@@ -1243,9 +1496,12 @@ function newInviteCode() {
 }
 
 app.post('/api/sa/invites', requireSuperadmin, (req, res) => {
+  const planKey = String((req.body || {}).plan || 'basico');
+  const plan = PLANS[planKey];
+  if (!plan) return res.status(400).json({ error: 'Plan no válido' });
   const invites = readInvites();
   const code = newInviteCode();
-  invites.push(code);
+  invites.push({ code, quotaGB: plan.quotaGB, usageDays: plan.usageDays, source: 'manual', createdAt: Date.now() });
   writeInvites(invites);
   res.json({ ok: true, code });
 });
@@ -1254,9 +1510,27 @@ app.post('/api/sa/invites', requireSuperadmin, (req, res) => {
 app.delete('/api/sa/invites/:code', requireSuperadmin, (req, res) => {
   const invites = readInvites();
   const code = String(req.params.code || '').toUpperCase();
-  if (!invites.includes(code)) return res.status(404).json({ error: 'Código no encontrado' });
-  writeInvites(invites.filter((c) => c !== code));
+  if (!findInvite(invites, code)) return res.status(404).json({ error: 'Código no encontrado' });
+  writeInvites(invites.filter((entry) => inviteCodeOf(entry) !== code));
   res.json({ ok: true });
+});
+
+// Histórico de compras con Stripe: qué se compró, quién, el código que se
+// generó y si ya se canjeó (deja de estar entre los códigos sin usar). Si el
+// email de entrega falló, aparece pendiente para poder entregarlo a mano.
+app.get('/api/sa/purchases', requireSuperadmin, (req, res) => {
+  const unusedCodes = new Set(readInvites().map(inviteCodeOf));
+  const list = Object.entries(readPurchases()).map(([sessionId, p]) => ({
+    sessionId,
+    plan: PLANS[p.plan]?.name || p.plan,
+    code: p.code,
+    email: p.email || null,
+    amountTotal: p.amountTotal,
+    createdAt: p.createdAt,
+    emailedAt: p.emailedAt || null,
+    redeemed: !unusedCodes.has(p.code),
+  }));
+  res.json(list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
 });
 
 // ---------- Expiración automática de las cuentas ----------

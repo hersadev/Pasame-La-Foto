@@ -112,29 +112,43 @@ function showLogin() {
 async function showPanel() {
   loginView.hidden = true;
   panelView.hidden = false;
-  await Promise.all([loadInvites(), loadStorage(), loadUsers()]);
+  await Promise.all([loadInvites(), loadPurchases(), loadStorage(), loadUsers()]);
 }
 
 // ---------- Códigos de invitación ----------
 
 async function loadInvites() {
-  const codes = await api('/invites');
+  const invites = await api('/invites');
   inviteList.innerHTML = '';
-  inviteEmpty.hidden = codes.length > 0;
-  for (const code of codes) {
+  inviteEmpty.hidden = invites.length > 0;
+  for (const inv of invites) {
     const li = document.createElement('li');
     li.className = 'invite-row';
 
     const span = document.createElement('span');
     span.className = 'invite-code';
-    span.textContent = code;
+    span.textContent = inv.code;
+
+    const meta = document.createElement('span');
+    meta.className = 'invite-meta';
+    const planChip = document.createElement('span');
+    planChip.className = 'chip chip-muted';
+    planChip.textContent = `${inv.quotaGB} GB · ${inv.usageDays} días`;
+    meta.appendChild(planChip);
+    if (inv.source === 'stripe') {
+      const buyChip = document.createElement('span');
+      buyChip.className = 'chip chip-ok';
+      buyChip.textContent = 'Compra';
+      buyChip.title = inv.email ? `Comprado por ${inv.email}` : 'Comprado con Stripe';
+      meta.appendChild(buyChip);
+    }
 
     const copyBtn = document.createElement('button');
     copyBtn.className = 'btn-ghost btn-compact';
     copyBtn.textContent = 'Copiar';
     copyBtn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(code);
+        await navigator.clipboard.writeText(inv.code);
         toast('Código copiado');
       } catch {
         toast('No se pudo copiar', true);
@@ -145,9 +159,9 @@ async function loadInvites() {
     revokeBtn.className = 'btn-danger btn-compact';
     revokeBtn.textContent = 'Revocar';
     revokeBtn.addEventListener('click', async () => {
-      if (!(await confirmDialog(`¿Revocar el código ${code}? Nadie podrá registrarse con él.`, 'Revocar'))) return;
+      if (!(await confirmDialog(`¿Revocar el código ${inv.code}? Nadie podrá registrarse con él.`, 'Revocar'))) return;
       try {
-        await api(`/invites/${encodeURIComponent(code)}`, { method: 'DELETE' });
+        await api(`/invites/${encodeURIComponent(inv.code)}`, { method: 'DELETE' });
         toast('Código revocado');
         loadInvites();
       } catch (err) {
@@ -155,20 +169,72 @@ async function loadInvites() {
       }
     });
 
-    li.append(span, copyBtn, revokeBtn);
+    li.append(span, meta, copyBtn, revokeBtn);
     inviteList.appendChild(li);
   }
 }
 
 document.getElementById('genInvite').addEventListener('click', async () => {
   try {
-    const { code } = await api('/invites', { method: 'POST', body: {} });
+    const plan = document.getElementById('invitePlan').value;
+    const { code } = await api('/invites', { method: 'POST', body: { plan } });
     toast(`Código creado: ${code}`);
     loadInvites();
   } catch (err) {
     toast(err.message, true);
   }
 });
+
+// ---------- Compras (Stripe) ----------
+
+async function loadPurchases() {
+  const purchases = await api('/purchases');
+  const body = document.getElementById('purchasesBody');
+  const chip = document.getElementById('purchasesChip');
+  body.innerHTML = '';
+  document.getElementById('purchasesEmpty').hidden = purchases.length > 0;
+  chip.textContent = `${purchases.length} compra${purchases.length === 1 ? '' : 's'}`;
+
+  for (const p of purchases) {
+    const tr = document.createElement('tr');
+
+    const tdDate = document.createElement('td');
+    tdDate.textContent = p.createdAt ? new Date(p.createdAt).toLocaleDateString('es-ES') : '—';
+
+    const tdEmail = document.createElement('td');
+    tdEmail.textContent = p.email || '—';
+
+    const tdPlan = document.createElement('td');
+    tdPlan.textContent = p.plan;
+
+    const tdAmount = document.createElement('td');
+    tdAmount.textContent = Number.isFinite(p.amountTotal) ? `${(p.amountTotal / 100).toLocaleString('es-ES')} €` : '—';
+
+    const tdCode = document.createElement('td');
+    const code = document.createElement('span');
+    code.className = 'invite-code';
+    code.textContent = p.code;
+    tdCode.appendChild(code);
+
+    const tdStatus = document.createElement('td');
+    const status = document.createElement('span');
+    if (p.redeemed) {
+      status.className = 'chip chip-ok';
+      status.textContent = 'Canjeado';
+    } else if (!p.emailedAt) {
+      // El cobro llegó pero el email con el código falló: entrégalo a mano
+      status.className = 'chip chip-warn';
+      status.textContent = 'Email pendiente';
+    } else {
+      status.className = 'chip chip-muted';
+      status.textContent = 'Sin canjear';
+    }
+    tdStatus.appendChild(status);
+
+    tr.append(tdDate, tdEmail, tdPlan, tdAmount, tdCode, tdStatus);
+    body.appendChild(tr);
+  }
+}
 
 // ---------- Almacenamiento global ----------
 

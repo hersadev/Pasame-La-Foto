@@ -4,8 +4,10 @@ const loginError = document.getElementById('loginError');
 const registerError = document.getElementById('registerError');
 const toggleAuth = document.getElementById('toggleAuth');
 
-// Con sesión ya iniciada, directo a su galería
+// Con sesión ya iniciada, directo a su galería. Al volver de la página de
+// pago (?compra=…) no se salta: el aviso de la compra importa más.
 (async function init() {
+  if (new URLSearchParams(location.search).has('compra')) return;
   try {
     const res = await fetch('/api/me');
     const me = await res.json();
@@ -68,6 +70,71 @@ registerForm.addEventListener('submit', async (e) => {
   if (ok) location.href = `/e/${data.eventId}`;
   else registerError.textContent = data.error || 'No se pudo crear el portal';
 });
+
+// ---------- Compra directa (Stripe) ----------
+
+const purchaseBanner = document.getElementById('purchaseBanner');
+const purchaseBannerText = document.getElementById('purchaseBannerText');
+
+function showPurchaseBanner(message, isWarn = false) {
+  purchaseBannerText.textContent = message;
+  purchaseBanner.classList.toggle('lp-banner-warn', isWarn);
+  purchaseBanner.hidden = false;
+}
+
+document.getElementById('purchaseBannerClose').addEventListener('click', () => {
+  purchaseBanner.hidden = true;
+});
+
+// Vuelta de la página de pago de Stripe. El código lo entrega el servidor por
+// email cuando Stripe confirma el cobro; aquí solo se avisa. La URL se limpia
+// para que recargar o compartirla no repita el aviso.
+const compra = new URLSearchParams(location.search).get('compra');
+if (compra === 'exito') {
+  showPurchaseBanner('¡Pago completado! En un momento recibirás tu código de invitación por email (revisa también el spam). Con él, crea tu portal en la sección «Tu cuenta».');
+} else if (compra === 'cancelada') {
+  showPurchaseBanner('El pago se canceló y no se te ha cobrado nada. Si tuviste algún problema, escríbenos y te ayudamos.', true);
+}
+if (compra) history.replaceState(null, '', location.pathname + location.hash);
+
+// Sin Stripe configurado en el servidor, los botones de compra llevan al
+// formulario de contacto: la contratación vuelve a ser por email.
+let buyEnabled = true;
+(async function loadPlans() {
+  try {
+    const res = await fetch('/api/plans');
+    buyEnabled = Boolean((await res.json()).enabled);
+  } catch {
+    buyEnabled = false;
+  }
+  if (!buyEnabled) {
+    for (const btn of document.querySelectorAll('[data-plan]')) btn.textContent = 'Solicitar por email';
+  }
+})();
+
+function goToContactToHire() {
+  document.getElementById('ctTopic').value = 'contratar';
+  location.hash = '#contacto';
+}
+
+for (const btn of document.querySelectorAll('[data-plan]')) {
+  btn.addEventListener('click', async () => {
+    if (!buyEnabled) return goToContactToHire();
+    btn.disabled = true;
+    try {
+      const { ok, data } = await postJson('/api/checkout', { plan: btn.dataset.plan });
+      if (ok && data.url) {
+        location.href = data.url; // página de pago de Stripe
+        return;
+      }
+      showPurchaseBanner(data.error || 'No se pudo iniciar el pago, inténtalo de nuevo en unos minutos.', true);
+    } catch {
+      showPurchaseBanner('No se pudo iniciar el pago, inténtalo de nuevo en unos minutos.', true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
 
 // ---------- Formulario de contacto ----------
 

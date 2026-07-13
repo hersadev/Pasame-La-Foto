@@ -34,11 +34,41 @@
       <div class="admin-card">
         <div class="admin-card-head">
           <h2>Códigos de invitación</h2>
-          <button id="genInvite" class="btn-gold btn-compact">Generar código</button>
+          <div class="invite-gen">
+            <select id="invitePlan" aria-label="Plan del código">
+              <option value="basico">Básica · 3 GB · 15 días</option>
+              <option value="grande">Grande · 5 GB · 25 días</option>
+            </select>
+            <button id="genInvite" class="btn-gold btn-compact">Generar código</button>
+          </div>
         </div>
-        <p class="field-hint">Cada código permite crear una cuenta y se consume al registrarse.</p>
+        <p class="field-hint">Cada código permite crear una cuenta con el plan indicado y se consume al registrarse. Los códigos de las compras con Stripe se generan y envían solos.</p>
         <ul id="inviteList" class="invite-list"></ul>
         <p id="inviteEmpty" class="field-hint" hidden>No hay códigos sin usar.</p>
+      </div>
+
+      <div class="admin-card">
+        <div class="admin-card-head">
+          <h2>Compras</h2>
+          <span id="purchasesChip" class="chip chip-muted">—</span>
+        </div>
+        <p class="field-hint">Pagos completados con Stripe: cada uno generó un código que se envió por email al comprador.</p>
+        <div class="table-scroll">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Email</th>
+                <th>Plan</th>
+                <th>Importe</th>
+                <th>Código</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody id="purchasesBody"></tbody>
+          </table>
+        </div>
+        <p id="purchasesEmpty" class="field-hint" hidden>Ninguna compra todavía.</p>
       </div>
 
       <div class="admin-card">
