@@ -4,46 +4,268 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#f5ead8" />
-  <title>Pásame la foto</title>
+  <meta name="description" content="La galería colaborativa de tu evento: tus invitados suben sus fotos escaneando un código QR, sin apps ni registros, y tú lo descargas todo en un ZIP." />
+  <title>Pásame la foto — La galería colaborativa de tu evento</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%B8%3C/text%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Caprasimo&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
 </head>
-<body class="landing-body">
+<body class="landing-body lp-body">
 
-  <main class="landing">
-    <div class="hero-blob" aria-hidden="true"></div>
-    <div class="landing-blob-2" aria-hidden="true"></div>
+  <header class="topbar lp-header">
+    <a href="#top" class="brand lp-brand-link">Pásame la foto</a>
+    <nav class="lp-nav">
+      <a href="#como-funciona" class="lp-nav-link">Cómo funciona</a>
+      <a href="#contratar" class="lp-nav-link">Contratar</a>
+      <a href="#contacto" class="lp-nav-link">Contacto</a>
+      <a href="#acceso" class="btn-gold btn-compact">Entrar</a>
+    </nav>
+  </header>
 
-    <h1 class="landing-brand">Pásame la foto</h1>
-    <p class="landing-sub">La galería colaborativa de tu evento</p>
+  <main class="lp" id="top">
 
-    <section class="auth-card">
-      <!-- Login -->
-      <form id="loginForm">
-        <h2>Accede a tu portal</h2>
-        <input type="text" id="loginUser" placeholder="Nombre de usuario" autocomplete="username" autocapitalize="none" spellcheck="false" required />
-        <input type="password" id="loginPass" placeholder="Contraseña" autocomplete="current-password" required />
-        <button type="submit" class="btn-gold">Entrar</button>
-        <p id="loginError" class="form-error"></p>
-      </form>
+    <!-- ============ Hero ============ -->
+    <section class="lp-hero">
+      <div class="hero-blob" aria-hidden="true"></div>
+      <div class="landing-blob-2" aria-hidden="true"></div>
 
-      <!-- Registro con código de invitación -->
-      <form id="registerForm" hidden>
-        <h2>Crea tu portal</h2>
-        <input type="text" id="regUser" placeholder="Nombre de usuario" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="30" required />
-        <input type="email" id="regEmail" placeholder="Email" autocomplete="email" required />
-        <input type="password" id="regPass" placeholder="Contraseña (mínimo 8 caracteres)" autocomplete="new-password" minlength="8" required />
-        <input type="text" id="regCode" placeholder="Código de invitación" autocapitalize="characters" spellcheck="false" required />
-        <p class="field-hint">Tu portal tendrá su propia galería y su código QR para los invitados. Usaremos tu email solo si necesitas recuperar la contraseña.</p>
-        <button type="submit" class="btn-gold">Crear mi portal</button>
-        <p id="registerError" class="form-error"></p>
-      </form>
+      <h1 class="lp-title">Pásame la foto</h1>
+      <p class="lp-tagline">
+        Todas las fotos de tu evento en una sola galería, llenándose en directo.
+        Tus invitados escanean un código QR y suben las suyas: sin apps, sin registros, sin perseguir a nadie.
+      </p>
+      <div class="lp-cta-row">
+        <a href="#contratar" class="btn-gold">Quiero mi galería</a>
+        <a href="#como-funciona" class="btn-ghost">Ver cómo funciona</a>
+      </div>
 
-      <button id="toggleAuth" class="link-btn">¿Tienes un código de invitación? Crea tu portal</button>
+      <div class="lp-polaroids" aria-hidden="true">
+        <figure class="polaroid polaroid-1">
+          <div class="ph ph-sunset"></div>
+          <figcaption>¡El brindis!</figcaption>
+        </figure>
+        <figure class="polaroid polaroid-2">
+          <div class="ph ph-dance"></div>
+          <figcaption>Primer baile</figcaption>
+        </figure>
+        <figure class="polaroid polaroid-3">
+          <div class="ph ph-field"></div>
+          <figcaption>La abuela 💛</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- ============ Cómo funciona ============ -->
+    <section id="como-funciona" class="lp-section">
+      <h2 class="lp-heading">Cómo funciona</h2>
+      <p class="lp-sub">De cero a galería llena, en cuatro pasos.</p>
+
+      <ol class="lp-steps">
+        <li class="lp-step">
+          <div class="lp-step-text">
+            <span class="lp-step-num" aria-hidden="true">1</span>
+            <h3>Consigue tu código y crea tu portal</h3>
+            <p>
+              Escríbenos para contratar el servicio y te enviamos por email un código de invitación
+              de un solo uso. Con él creas tu cuenta y tu galería queda lista en un minuto.
+            </p>
+          </div>
+          <div class="lp-shot" aria-hidden="true">
+            <span class="lp-shot-badge">Tu código, por email</span>
+            <div class="mini-card">
+              <p class="mini-h">Crea tu portal</p>
+              <div class="mini-input">ana.y.luis</div>
+              <div class="mini-input">••••••••••</div>
+              <div class="mini-input mini-code">7KQ2-M9XW</div>
+              <div class="mini-btn">Crear mi portal</div>
+            </div>
+          </div>
+        </li>
+
+        <li class="lp-step">
+          <div class="lp-step-text">
+            <span class="lp-step-num" aria-hidden="true">2</span>
+            <h3>Personaliza tu evento y comparte el QR</h3>
+            <p>
+              Ponle nombre a tu evento, elige tu marca de agua y fija el día de inicio.
+              Después imprime el código QR para las mesas o comparte el enlace por donde quieras.
+            </p>
+          </div>
+          <div class="lp-shot" aria-hidden="true">
+            <span class="lp-shot-badge">Imprímelo o compártelo</span>
+            <div class="mini-card mini-qr-card">
+              <svg class="mini-qr" viewBox="0 0 21 21" shape-rendering="crispEdges" role="img">
+                <path class="mini-qr-path" d="M0 0.5h7m3 0h1m1 0h1m1 0h7M0 1.5h1m5 0h1m1 0h1m1 0h1m1 0h1m1 0h1m5 0h1M0 2.5h1m1 0h3m1 0h1m1 0h1m1 0h2m2 0h1m1 0h3m1 0h1M0 3.5h1m1 0h3m1 0h1m5 0h1m1 0h1m1 0h3m1 0h1M0 4.5h1m1 0h3m1 0h1m1 0h5m1 0h1m1 0h3m1 0h1M0 5.5h1m5 0h1m1 0h3m3 0h1m5 0h1M0 6.5h7m1 0h1m1 0h1m1 0h1m1 0h7M8 7.5h1M0 8.5h2m1 0h1m2 0h2m2 0h3m1 0h3m1 0h2M3 9.5h2m3 0h2m1 0h1m5 0h2m1 0h1M0 10.5h1m1 0h2m2 0h1m1 0h1m2 0h1m3 0h1m1 0h2M0 11.5h1m1 0h4m2 0h1m1 0h1m1 0h1m1 0h1m1 0h4M0 12.5h1m2 0h2m1 0h1m3 0h2m1 0h1m5 0h2M8 13.5h2m3 0h1m1 0h1m2 0h1M0 14.5h7m1 0h1m1 0h3m2 0h1m1 0h3M0 15.5h1m5 0h1m2 0h1m4 0h1m3 0h1m1 0h1M0 16.5h1m1 0h3m1 0h1m2 0h2m1 0h3m2 0h1m2 0h1M0 17.5h1m1 0h3m1 0h1m1 0h2m4 0h1m3 0h3M0 18.5h1m1 0h3m1 0h1m3 0h2m2 0h4m2 0h1M0 19.5h1m5 0h1m1 0h1m2 0h2m2 0h1m1 0h1m2 0h1M0 20.5h7m1 0h3" />
+              </svg>
+              <p class="mini-qr-name">Boda de Ana & Luis</p>
+              <p class="mini-qr-hint">Escanéame y pásame tus fotos</p>
+            </div>
+          </div>
+        </li>
+
+        <li class="lp-step">
+          <div class="lp-step-text">
+            <span class="lp-step-num" aria-hidden="true">3</span>
+            <h3>Tus invitados llenan la galería</h3>
+            <p>
+              Escanean el QR con el móvil y suben sus fotos al momento, sin instalar nada
+              ni crear ninguna cuenta. Todo el mundo ve la galería crecer durante el evento.
+            </p>
+          </div>
+          <div class="lp-shot" aria-hidden="true">
+            <span class="lp-shot-badge">Sin apps ni registros</span>
+            <div class="mini-phone">
+              <div class="mini-topbar">Pásame la foto</div>
+              <p class="mini-event">Boda de Ana & Luis</p>
+              <span class="mini-count">128 fotos</span>
+              <div class="mini-grid">
+                <div class="mini-tile ph-sunset"></div>
+                <div class="mini-tile ph-dance"></div>
+                <div class="mini-tile ph-field"></div>
+                <div class="mini-tile ph-cake"></div>
+                <div class="mini-tile ph-confetti"></div>
+                <div class="mini-tile ph-night"></div>
+              </div>
+              <div class="mini-fab">+ Subir fotos</div>
+            </div>
+          </div>
+        </li>
+
+        <li class="lp-step">
+          <div class="lp-step-text">
+            <span class="lp-step-num" aria-hidden="true">4</span>
+            <h3>Descarga el recuerdo completo</h3>
+            <p>
+              Cuando quieras, bájate todas las fotos en un ZIP con un clic.
+              Y al caducar la galería, todo se borra del servidor: tus fotos no se quedan en internet.
+            </p>
+          </div>
+          <div class="lp-shot" aria-hidden="true">
+            <span class="lp-shot-badge">Tuyas para siempre</span>
+            <div class="mini-card mini-zip">
+              <div class="mini-zip-row">
+                <span class="mini-zip-icon">📦</span>
+                <span class="mini-zip-file">
+                  <span class="mini-zip-name">pasame-la-foto.zip</span>
+                  <span class="mini-zip-size">312 fotos · 1,8 GB</span>
+                </span>
+                <span class="mini-zip-check">✓</span>
+              </div>
+              <div class="mini-progress"><div class="mini-progress-fill"></div></div>
+              <span class="chip chip-warn">La galería caduca en 3 días</span>
+            </div>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <!-- ============ Contratar ============ -->
+    <section id="contratar" class="lp-section">
+      <h2 class="lp-heading">Contrata tu galería</h2>
+      <p class="lp-sub">Un evento, una galería privada. Nos escribes, te enviamos tu código y en minutos está funcionando.</p>
+
+      <div class="lp-hire">
+        <div class="lp-card lp-includes-card">
+          <h3>Todo esto incluye</h3>
+          <ul class="lp-includes">
+            <li>Galería privada con su propio enlace y código QR</li>
+            <li>Los invitados suben fotos sin apps ni registros</li>
+            <li>Marca de agua personalizada en las fotos que ven los invitados</li>
+            <li>Tú decides qué fotos se pueden descargar</li>
+            <li>Descarga completa en ZIP con un clic</li>
+            <li>15 días de galería activa, ampliables si lo necesitas</li>
+            <li>Espacio de sobra para miles de fotos</li>
+            <li>Al caducar, todo se borra: nada se queda en internet</li>
+          </ul>
+        </div>
+
+        <aside class="lp-card lp-hire-cta">
+          <h3>Así de fácil</h3>
+          <ol class="lp-hire-steps">
+            <li>Nos escribes contándonos tu evento</li>
+            <li>Te mandamos tu código de invitación por email</li>
+            <li>Creas tu portal y compartes el QR</li>
+          </ol>
+          <a href="#contacto" class="btn-gold lp-block-btn" data-topic="contratar">Solicitar mi código</a>
+          <a href="#acceso" class="link-btn lp-link-center" data-auth="register">¿Ya tienes un código? Crea tu portal</a>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ Contacto ============ -->
+    <section id="contacto" class="lp-section">
+      <h2 class="lp-heading">Escríbenos</h2>
+      <p class="lp-sub">¿Quieres contratar o tienes alguna duda? Te respondemos por email.</p>
+
+      <div class="lp-card lp-contact-card">
+        <form id="contactForm">
+          <div class="lp-form-row">
+            <input type="text" id="ctName" placeholder="Tu nombre" maxlength="80" autocomplete="name" required />
+            <input type="email" id="ctEmail" placeholder="Tu email" autocomplete="email" required />
+          </div>
+          <select id="ctTopic" aria-label="Motivo del mensaje">
+            <option value="contratar">Quiero contratar el servicio</option>
+            <option value="duda">Tengo una duda</option>
+          </select>
+          <textarea id="ctMessage" rows="5" placeholder="Cuéntanos qué evento tienes entre manos: fecha, cuánta gente, lo que necesites…" minlength="10" maxlength="2000" required></textarea>
+          <button type="submit" class="btn-gold">Enviar mensaje</button>
+          <p id="contactError" class="form-error"></p>
+          <p class="field-hint lp-hint-center">Te responderemos al email que nos dejes. No lo usaremos para nada más.</p>
+        </form>
+
+        <div id="contactSuccess" class="lp-contact-success" hidden>
+          <span class="lp-success-icon" aria-hidden="true">✓</span>
+          <h3>¡Mensaje enviado!</h3>
+          <p>Gracias por escribirnos. Te responderemos muy pronto a <strong id="ctSuccessEmail"></strong>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ Acceso ============ -->
+    <section id="acceso" class="lp-section lp-acceso">
+      <h2 class="lp-heading">Tu cuenta</h2>
+      <p class="lp-sub">Entra en tu portal o crea uno con tu código de invitación.</p>
+
+      <section class="auth-card">
+        <!-- Login -->
+        <form id="loginForm">
+          <h2>Accede a tu portal</h2>
+          <input type="text" id="loginUser" placeholder="Nombre de usuario" autocomplete="username" autocapitalize="none" spellcheck="false" required />
+          <input type="password" id="loginPass" placeholder="Contraseña" autocomplete="current-password" required />
+          <button type="submit" class="btn-gold">Entrar</button>
+          <p id="loginError" class="form-error"></p>
+        </form>
+
+        <!-- Registro con código de invitación -->
+        <form id="registerForm" hidden>
+          <h2>Crea tu portal</h2>
+          <input type="text" id="regUser" placeholder="Nombre de usuario" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="30" required />
+          <input type="email" id="regEmail" placeholder="Email" autocomplete="email" required />
+          <input type="password" id="regPass" placeholder="Contraseña (mínimo 8 caracteres)" autocomplete="new-password" minlength="8" required />
+          <input type="text" id="regCode" placeholder="Código de invitación" autocapitalize="characters" spellcheck="false" required />
+          <p class="field-hint">Tu portal tendrá su propia galería y su código QR para los invitados. Usaremos tu email solo si necesitas recuperar la contraseña.</p>
+          <button type="submit" class="btn-gold">Crear mi portal</button>
+          <p id="registerError" class="form-error"></p>
+        </form>
+
+        <button id="toggleAuth" class="link-btn">¿Tienes un código de invitación? Crea tu portal</button>
+      </section>
     </section>
   </main>
+
+  <footer class="lp-footer">
+    <p class="lp-footer-brand">Pásame la foto</p>
+    <p class="lp-footer-sub">La galería colaborativa de tu evento</p>
+    <nav class="lp-footer-nav">
+      <a href="#como-funciona">Cómo funciona</a>
+      <a href="#contratar">Contratar</a>
+      <a href="#contacto">Contacto</a>
+      <a href="#acceso">Tu cuenta</a>
+    </nav>
+    <p class="lp-footer-note">Hecho con cariño para que ninguna foto se quede olvidada en un móvil.</p>
+  </footer>
 
   <script src="/pw-toggle.js"></script>
   <script src="/landing.js"></script>

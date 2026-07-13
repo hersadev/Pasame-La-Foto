@@ -15,13 +15,24 @@ const toggleAuth = document.getElementById('toggleAuth');
   }
 })();
 
-toggleAuth.addEventListener('click', () => {
-  const showRegister = registerForm.hidden;
+function setAuthMode(showRegister) {
   registerForm.hidden = !showRegister;
   loginForm.hidden = showRegister;
   toggleAuth.textContent = showRegister
     ? 'Ya tengo cuenta: iniciar sesión'
     : '¿Tienes un código de invitación? Crea tu portal';
+}
+
+toggleAuth.addEventListener('click', () => setAuthMode(registerForm.hidden));
+
+// Enlaces de la landing que preparan una sección antes de saltar a su ancla:
+// - data-auth="register": abre el formulario de registro en #acceso
+// - data-topic: preselecciona el motivo del formulario de contacto
+document.addEventListener('click', (e) => {
+  const authLink = e.target.closest('[data-auth="register"]');
+  if (authLink) setAuthMode(true);
+  const topicLink = e.target.closest('[data-topic]');
+  if (topicLink) document.getElementById('ctTopic').value = topicLink.dataset.topic;
 });
 
 async function postJson(url, body) {
@@ -56,4 +67,31 @@ registerForm.addEventListener('submit', async (e) => {
   });
   if (ok) location.href = `/e/${data.eventId}`;
   else registerError.textContent = data.error || 'No se pudo crear el portal';
+});
+
+// ---------- Formulario de contacto ----------
+
+const contactForm = document.getElementById('contactForm');
+const contactError = document.getElementById('contactError');
+
+contactForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  contactError.textContent = '';
+  const submitBtn = contactForm.querySelector('button[type="submit"]');
+  submitBtn.disabled = true;
+  const email = document.getElementById('ctEmail').value.trim();
+  const { ok, data } = await postJson('/api/contact', {
+    name: document.getElementById('ctName').value,
+    email,
+    topic: document.getElementById('ctTopic').value,
+    message: document.getElementById('ctMessage').value,
+  });
+  submitBtn.disabled = false;
+  if (ok) {
+    document.getElementById('ctSuccessEmail').textContent = email;
+    contactForm.hidden = true;
+    document.getElementById('contactSuccess').hidden = false;
+  } else {
+    contactError.textContent = data.error || 'No se pudo enviar el mensaje, inténtalo de nuevo';
+  }
 });
