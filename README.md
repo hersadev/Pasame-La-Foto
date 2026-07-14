@@ -47,7 +47,8 @@ La web queda en `http://localhost:3000`. Con el código de invitación, cada org
 | `PORT` | `3000` | Puerto del servidor. |
 | `SESSION_SECRET` | *(obligatoria)* | Cadena aleatoria larga para firmar las sesiones. El servidor no arranca sin ella. |
 | `PUBLIC_URL` | URL del propio servidor | URL pública base de los códigos QR. Si empieza por `https://`, la cookie de sesión se marca como `secure`. |
-| `MAX_FILE_MB` | `100` | Tamaño máximo por archivo (MB). |
+| `MAX_FILE_MB` | `25` | Tamaño máximo por archivo (MB). |
+| `MAX_REQUEST_MB` | `200` | Tamaño máximo de una petición de subida completa (MB, todos los archivos juntos). |
 | `MAX_TOTAL_GB` | `3` | Espacio máximo por evento; al alcanzarlo se rechazan subidas. El SuperAdministrador puede ampliar la cuota de cuentas concretas. |
 | `SUPERADMIN_USER` / `SUPERADMIN_PASSWORD` | *(vacías)* | Credenciales del panel `/admin`. Sin ellas, el panel y su API quedan desactivados (404). |
 | `IMAGE_MAX_SIDE` | `2560` | Lado mayor (px) de las fotos tras comprimirlas. |
