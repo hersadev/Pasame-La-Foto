@@ -1199,9 +1199,9 @@ body.landing-body {
 }
 
 .details-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.7rem 2rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.8rem 1.5rem;
 }
 
 .detail-item {
@@ -1221,11 +1221,12 @@ body.landing-body {
 .detail-space {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.3rem;
+  white-space: nowrap;
 }
 
 .detail-track {
-  width: 160px;
+  width: 140px;
   height: 6px;
 }
 
@@ -1233,6 +1234,8 @@ body.landing-body {
   display: flex;
   gap: 0.35rem;
   flex-wrap: wrap;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--line);
 }
 
 .chip {

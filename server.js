@@ -24,6 +24,13 @@ const USERS_PATH = path.join(DATA_DIR, 'users.json');
 const INVITES_PATH = path.join(DATA_DIR, 'invites.json');
 const PURCHASES_PATH = path.join(DATA_DIR, 'purchases.json');
 const DEFAULT_USAGE_DAYS = 15; // ventana de uso desde el día de inicio que fija el usuario
+// URL pública del servicio. Es la ÚNICA fuente de la base para los enlaces que
+// salen del servidor (email de recuperación, código de la compra, aviso de
+// caducidad y el QR del evento). Nunca se deriva de la cabecera Host de la
+// petición: esa cabecera la controla el cliente, así que un atacante podría
+// pedir el reset de otra cuenta con "Host: dominio-atacante" y hacer que el
+// enlace del correo —con el token válido— apunte a su servidor. Por eso es
+// obligatoria (como SESSION_SECRET): sin ella no se arranca.
 const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
 const IS_HTTPS = PUBLIC_URL.startsWith('https://');
 
@@ -67,6 +74,13 @@ const PLANS = {
 const SESSION_SECRET = process.env.SESSION_SECRET;
 if (!SESSION_SECRET) {
   console.error('Falta SESSION_SECRET en el .env. Copia .env.example y complétalo antes de arrancar.');
+  process.exit(1);
+}
+
+// Obligatoria y bien formada: los enlaces que salen por email se construyen con
+// ella (ver comentario arriba). En local vale http://localhost:3000.
+if (!/^https?:\/\/.+/.test(PUBLIC_URL)) {
+  console.error('Falta PUBLIC_URL en el .env (p.ej. https://fotos.tudominio.com o http://localhost:3000). Es la base de los enlaces que se envían por email; sin ella no se arranca.');
   process.exit(1);
 }
 
@@ -118,7 +132,7 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
     event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded';
   if (isPaymentEvent && event.data.object.payment_status === 'paid') {
     try {
-      await fulfillPurchase(event.data.object, req);
+      await fulfillPurchase(event.data.object);
     } catch (err) {
       // Con un 500, Stripe reintenta el webhook: fulfillPurchase es idempotente
       // y el reintento retoma justo lo que faltó (p.ej. solo el email).
@@ -832,8 +846,7 @@ app.post('/api/forgot-password', forgotPasswordLimiter, async (req, res) => {
   account.resetTokenExpires = Date.now() + RESET_TOKEN_MS;
   writeUsers(users);
 
-  const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  const link = `${base}/?resetToken=${token}`;
+  const link = `${PUBLIC_URL}/?resetToken=${token}`;
   try {
     await sendMail({
       to: email,
@@ -943,7 +956,7 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
   const planKey = String((req.body || {}).plan || '');
   const plan = PLANS[planKey];
   if (!plan) return res.status(400).json({ error: 'Plan no válido' });
-  const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  const base = PUBLIC_URL;
   try {
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
@@ -979,7 +992,7 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
 // reintenta únicamente el envío (el código ya creado se reutiliza).
 const fulfillingSessions = new Set(); // frena webhooks duplicados que lleguen a la vez
 
-async function fulfillPurchase(session, req) {
+async function fulfillPurchase(session) {
   const planKey = session.metadata?.plan;
   const plan = PLANS[planKey];
   if (!plan) throw new Error(`plan desconocido "${planKey}"`);
@@ -1023,7 +1036,7 @@ async function fulfillPurchase(session, req) {
       return;
     }
 
-    const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+    const base = PUBLIC_URL;
     await sendMail({
       to: email,
       replyTo: CONTACT_EMAIL || undefined,
@@ -1336,8 +1349,7 @@ app.get('/api/e/:eventId/admin/wm-preview', loadEvent, requireEventAdmin, async 
 // PUBLIC_URL). Exige el día de inicio: el QR es lo que se imprime y reparte,
 // y sin ventana de uso llevaría a una galería que nunca abre.
 app.get('/e/:eventId/qr', loadEvent, requireEventAdmin, requireStartDate, async (req, res) => {
-  const base = PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  const png = await QRCode.toBuffer(`${base}/e/${req.event.id}`, { width: 600, margin: 2 });
+  const png = await QRCode.toBuffer(`${PUBLIC_URL}/e/${req.event.id}`, { width: 600, margin: 2 });
   res.type('png').send(png);
 });
 
@@ -1426,7 +1438,7 @@ app.patch('/api/sa/users/:username', requireSuperadmin, (req, res) => {
   const users = readUsers();
   const account = users[req.params.username];
   if (!account) return res.status(404).json({ error: 'Usuario no encontrado' });
-  const { usageDays, quotaGB, startDate } = req.body || {};
+  const { usageDays, quotaGB, startDate, force } = req.body || {};
 
   if (usageDays !== undefined) {
     const days = parseInt(usageDays, 10);
@@ -1448,11 +1460,30 @@ app.patch('/api/sa/users/:username', requireSuperadmin, (req, res) => {
       account.startDate = null; // el usuario volverá a ver el modal de día de inicio
       delete account.expiryWarned;
     } else if (DATE_RE.test(String(startDate))) {
+      const todayStart = new Date(new Date().toDateString()).getTime();
+      if (new Date(`${startDate}T00:00:00`).getTime() < todayStart) {
+        return res.status(400).json({ error: 'La fecha de inicio no puede ser anterior a hoy' });
+      }
       account.startDate = String(startDate);
       delete account.expiryWarned;
     } else {
       return res.status(400).json({ error: 'Fecha de inicio no válida' });
     }
+  }
+
+  // Cambiar la fecha de inicio o los días de uso puede dejar la ventana ya
+  // vencida (p.ej. bajar los días por debajo de los ya transcurridos): la
+  // barrida horaria borraría el evento y TODAS sus fotos, sin papelera ni
+  // vuelta atrás. No se hace en silencio: se exige confirmación explícita
+  // (force) desde el panel. Solo se comprueba si el propio cambio toca las
+  // fechas, para no bloquear una edición de cuota inofensiva.
+  const datesChanged = startDate !== undefined || usageDays !== undefined;
+  const result = eventWindow(account);
+  if (datesChanged && result.startDate && result.expiresAt <= Date.now() && force !== true) {
+    return res.status(409).json({
+      error: 'Con estos ajustes el evento quedaría caducado y se borrarían todas sus fotos en la próxima limpieza. Confírmalo para continuar.',
+      code: 'WOULD_EXPIRE',
+    });
   }
 
   writeUsers(users);

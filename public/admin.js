@@ -55,12 +55,14 @@ const promptInput = document.getElementById('promptInput');
 
 let promptResolve = null;
 
-function promptDialog({ title, message, value = '', type = 'text', placeholder = '' }) {
+function promptDialog({ title, message, value = '', type = 'text', placeholder = '', min = '' }) {
   promptTitle.textContent = title;
   promptText.textContent = message;
   promptInput.type = type;
   if (type === 'number') promptInput.step = 'any';
   else promptInput.removeAttribute('step');
+  if (min) promptInput.min = min;
+  else promptInput.removeAttribute('min');
   promptInput.placeholder = placeholder;
   promptInput.value = value;
   promptModal.hidden = false;
@@ -100,7 +102,11 @@ async function api(path, options = {}) {
     showLogin();
     throw new Error('Sesión caducada');
   }
-  if (!res.ok) throw new Error(data.error || 'Error inesperado');
+  if (!res.ok) {
+    const err = new Error(data.error || 'Error inesperado');
+    err.code = data.code; // p.ej. WOULD_EXPIRE: el que llama decide si reintenta
+    throw err;
+  }
   return data;
 }
 
@@ -295,6 +301,14 @@ async function patchUser(username, body, okMsg) {
     toast(okMsg);
     loadUsers();
   } catch (err) {
+    // El servidor frena en seco un cambio que caducaría el evento (borra todas
+    // las fotos): se confirma de forma explícita y se reintenta forzándolo.
+    if (err.code === 'WOULD_EXPIRE') {
+      if (await confirmDialog(err.message, 'Caducar y borrar')) {
+        await patchUser(username, { ...body, force: true }, okMsg);
+      }
+      return;
+    }
     toast(err.message, true);
   }
 }
@@ -314,7 +328,8 @@ function detailItem(label, value) {
   return item;
 }
 
-// Espacio usado de la cuenta con su propia barra (misma rampa que la global)
+// Espacio usado de la cuenta con su propia barra (misma rampa que la global);
+// ocupa la columna Espacio de la fila
 function spaceDetail(u) {
   const pct = Math.min(100, Math.round((u.usedBytes / (u.quotaGB * 1024 ** 3)) * 100));
   const wrap = document.createElement('div');
@@ -366,7 +381,7 @@ async function loadUsers() {
     tdDays.textContent = `${u.usageDays} día${u.usageDays === 1 ? '' : 's'}`;
 
     const tdSpace = document.createElement('td');
-    tdSpace.textContent = `${fmtGB(u.usedBytes)} de ${u.quotaGB} GB`;
+    tdSpace.appendChild(spaceDetail(u));
 
     const tdToggle = document.createElement('td');
     tdToggle.className = 'cell-toggle';
@@ -379,29 +394,20 @@ async function loadUsers() {
 
     tr.append(tdUser, tdEvent, tdStatus, tdDays, tdSpace, tdToggle);
 
-    // Fila desplegable: datos completos de la cuenta y sus acciones
+    // Fila desplegable: solo lo que no está ya en la fila, más las acciones
     const detailsTr = document.createElement('tr');
     detailsTr.className = 'user-details';
     detailsTr.hidden = true;
     const detailsTd = document.createElement('td');
     detailsTd.colSpan = 6;
 
-    const gallery = document.createElement('a');
-    gallery.href = `/e/${u.eventId}`;
-    gallery.target = '_blank';
-    gallery.rel = 'noopener';
-    gallery.textContent = u.eventId;
-
     const info = document.createElement('div');
     info.className = 'details-grid';
     info.append(
       detailItem('Email', u.email || '—'),
-      detailItem('Galería del evento', gallery),
       detailItem('Cuenta creada', fmtDay(u.createdAt)),
       detailItem('Día de inicio', u.startDate ? fmtDay(u.startDate) : 'Sin fijar'),
-      detailItem('Caduca', u.startDate ? `${fmtDay(u.expiresAt)}${u.active ? ` (quedan ${u.daysLeft} día${u.daysLeft === 1 ? '' : 's'})` : ''}` : '—'),
-      detailItem('Días de uso', `${u.usageDays} día${u.usageDays === 1 ? '' : 's'}`),
-      detailItem('Espacio', spaceDetail(u))
+      detailItem('Caduca', u.startDate ? fmtDay(u.expiresAt) : '—')
     );
 
     const actions = document.createElement('div');
@@ -433,6 +439,7 @@ async function loadUsers() {
           message: `Día de inicio para "${u.username}". Déjalo vacío para que vuelva a elegirlo.`,
           value: u.startDate || '',
           type: 'date',
+          min: new Date().toLocaleDateString('en-CA'), // hoy en formato yyyy-mm-dd local
         });
         if (value === null) return;
         patchUser(u.username, { startDate: value.trim() || null }, 'Día de inicio actualizado');
