@@ -100,6 +100,11 @@ const DISK_RESERVE_GB = parseFloat(process.env.DISK_RESERVE_GB || '2'); // franj
 const IMAGE_MAX_SIDE = parseInt(process.env.IMAGE_MAX_SIDE || '2560', 10); // lado mayor tras comprimir
 const IMAGE_QUALITY = parseInt(process.env.IMAGE_QUALITY || '82', 10); // calidad JPEG
 const THUMB_SIZE = 480; // miniaturas de la galería
+// Techo de píxeles que sharp acepta al abrir una imagen subida. Frena las
+// "bombas de descompresión" (archivos pequeños que declaran dimensiones
+// gigantes y disparan la memoria al decodificar). 128 MP cubre cualquier
+// sensor de móvil actual y queda muy por debajo del default de sharp (~268 MP).
+const MAX_IMAGE_PIXELS = 128 * 1e6;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -107,6 +112,11 @@ if (IS_HTTPS) app.set('trust proxy', 1); // necesario para que la cookie "secure
 
 app.use(
   helmet({
+    // HSTS explícito para no depender del default de helmet: 2 años y
+    // subdominios incluidos cuando el sitio va por HTTPS. En despliegues solo
+    // HTTP (local) se desactiva: los navegadores lo ignorarían igualmente,
+    // pero así no se envía una cabecera que no aplica.
+    strictTransportSecurity: IS_HTTPS ? { maxAge: 63072000, includeSubDomains: true } : false,
     contentSecurityPolicy: {
       directives: {
         ...helmet.contentSecurityPolicy.getDefaultDirectives(),
@@ -120,13 +130,24 @@ app.use(
     },
   })
 );
+// Freno del webhook: la firma ya corta el abuso real, pero sin límite un
+// flujo de peticiones con firma falsa gastaría CPU en constructEvent. Holgado
+// de sobra para Stripe (un evento por compra más algún reintento).
+const webhookLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas peticiones' },
+});
+
 // Webhook de Stripe: la firma se verifica sobre el cuerpo en crudo, así que la
 // ruta se registra ANTES de express.json() (que lo consumiría). Aquí llega la
 // confirmación real del pago —la vuelta del navegador a la landing es solo
 // cosmética— y de aquí sale el código de invitación hacia el email del
 // comprador. checkout.session.completed cubre el pago con tarjeta;
 // async_payment_succeeded, los métodos que confirman más tarde.
-app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+app.post('/api/stripe/webhook', webhookLimiter, express.raw({ type: 'application/json', limit: '256kb' }), async (req, res) => {
   if (!STRIPE_ENABLED) return res.status(404).json({ error: 'No encontrado' });
   let event;
   try {
@@ -149,7 +170,9 @@ app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async
   res.json({ received: true });
 });
 
-app.use(express.json());
+// Límite explícito para no depender del default de Express (100 KB). Los JSON
+// de esta API son diminutos (login, ajustes, contacto); 50 KB sobra.
+app.use(express.json({ limit: '50kb' }));
 // event.html solo tiene sentido bajo /e/<id> (app.js saca el evento de la URL)
 app.get('/event.html', (req, res) => res.redirect('/'));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -561,7 +584,7 @@ async function getWatermarked(ev, sourcePath, cacheDir) {
     return cachedPath;
   }
   const { watermarkText } = readSettings(ev);
-  const image = sharp(sourcePath);
+  const image = sharp(sourcePath, { limitInputPixels: MAX_IMAGE_PIXELS });
   const { width, height } = await image.metadata();
   const svg = watermarkSvg(width, height, watermarkText);
   await image.composite([{ input: Buffer.from(svg) }]).toFile(cachedPath);
@@ -679,7 +702,7 @@ async function processUpload(ev, file) {
     const dst = path.join(ev.dir, path.basename(file.path, path.extname(file.path)) + '.jpg');
     const tmp = dst + '.tmp';
     try {
-      await sharp(file.path)
+      await sharp(file.path, { limitInputPixels: MAX_IMAGE_PIXELS })
         .rotate() // respeta la orientación EXIF
         .resize({ width: IMAGE_MAX_SIDE, height: IMAGE_MAX_SIDE, fit: 'inside', withoutEnlargement: true })
         .jpeg({ quality: IMAGE_QUALITY, mozjpeg: true })
@@ -697,7 +720,7 @@ async function processUpload(ev, file) {
     }
 
     try {
-      await sharp(finalPath)
+      await sharp(finalPath, { limitInputPixels: MAX_IMAGE_PIXELS })
         .rotate()
         .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover' })
         .jpeg({ quality: 70 })
@@ -1645,8 +1668,11 @@ app.use((err, req, res, next) => {
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({ error: `Archivo demasiado grande (máximo ${MAX_FILE_MB} MB)` });
   }
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Petición demasiado grande' });
+  }
   console.error(err.message);
-  res.status(400).json({ error: err.message });
+  res.status(err.status || 400).json({ error: err.message });
 });
 
 app.listen(PORT, () => {
