@@ -85,7 +85,13 @@ if (!/^https?:\/\/.+/.test(PUBLIC_URL)) {
 }
 
 // Límites y compresión (configurables en .env)
-const MAX_FILE_MB = parseInt(process.env.MAX_FILE_MB || '100', 10); // por archivo
+// Por archivo. 25 MB cubre de sobra la foto de cualquier móvil (3-15 MB) sin
+// dejar que un atacante infle cada subida; quien necesite originales de cámara
+// puede subirlo en el .env.
+const MAX_FILE_MB = parseInt(process.env.MAX_FILE_MB || '25', 10);
+// Tope de la petición completa (todos los archivos juntos). Junto al límite por
+// archivo de multer acota lo que una sola petición puede costar en disco y CPU.
+const MAX_REQUEST_MB = parseInt(process.env.MAX_REQUEST_MB || '200', 10);
 const MAX_TOTAL_GB = parseFloat(process.env.MAX_TOTAL_GB || '3'); // total por evento
 // Tope global de todos los eventos. Opcional: sin definir (o 'auto'), el límite
 // se calcula del espacio libre real del disco; con cifra, actúa como techo fijo.
@@ -483,7 +489,14 @@ function readJson(filePath, fallback) {
 }
 
 function writeJson(filePath, data) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  // Escritura atómica: primero a un temporal y luego rename (atómico dentro
+  // del mismo sistema de ficheros). Si el proceso muere a media escritura
+  // (OOM, docker stop, disco lleno), el JSON definitivo nunca queda truncado;
+  // con todo el estado en estos ficheros, un users.json corrupto perdería
+  // todas las cuentas.
+  const tmpPath = `${filePath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+  fs.renameSync(tmpPath, filePath);
 }
 
 function readSettings(ev) {
@@ -637,6 +650,13 @@ function eventQuotaGB(eventId) {
 // no permite saltarse la cuota más allá de una petición.
 function checkTotalSpace(req, res, next) {
   const incoming = parseInt(req.headers['content-length'], 10) || 0;
+
+  // Tope duro por petición: sin él, 20 archivos al máximo permitido por multer
+  // harían peticiones enormes de forma "legítima". Un Content-Length falseado a
+  // la baja rompe el parseo de la propia petición, así que la cota es efectiva.
+  if (incoming > MAX_REQUEST_MB * 1024 ** 2) {
+    return res.status(413).json({ error: `Subida demasiado grande (máximo ${MAX_REQUEST_MB} MB por envío)` });
+  }
 
   const eventUsed = dirSize(req.event.dir);
   if (eventUsed + incoming > eventQuotaGB(req.event.id) * 1024 ** 3) {
@@ -990,7 +1010,13 @@ app.post('/api/checkout', checkoutLimiter, async (req, res) => {
 // email. Idempotente por sesión de pago: un webhook repetido no genera códigos
 // ni correos duplicados y, si solo falló el email, el reintento de Stripe
 // reintenta únicamente el envío (el código ya creado se reutiliza).
-const fulfillingSessions = new Set(); // frena webhooks duplicados que lleguen a la vez
+// Frena webhooks duplicados que lleguen a la vez. OJO: es un Set en memoria,
+// solo protege dentro de este proceso. Con el despliegue actual (un único
+// contenedor) basta, pero si algún día se escala a varias réplicas, dos
+// webhooks simultáneos en procesos distintos podrían crear dos códigos: hay
+// una ventana entre readPurchases() y writePurchases(). Antes de escalar
+// horizontalmente, sustituir esto por un candado compartido (BD o similar).
+const fulfillingSessions = new Set();
 
 async function fulfillPurchase(session) {
   const planKey = session.metadata?.plan;
