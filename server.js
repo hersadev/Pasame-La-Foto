@@ -36,9 +36,25 @@ const IS_HTTPS = PUBLIC_URL.startsWith('https://');
 
 // Credenciales del SuperAdministrador. Sin ellas en el .env, el panel /admin
 // y toda la API /api/sa/* quedan desactivados (responden 404).
+// La contraseña NO se guarda en claro: se almacena su hash bcrypt en base64
+// (SUPERADMIN_PASSWORD_HASH_B64), igual que las contraseñas de usuario, para
+// que una fuga del .env no exponga la credencial reutilizable. Generar con:
+//   node -e "const b=require('bcryptjs');console.log(Buffer.from(b.hashSync(process.argv[1],12)).toString('base64'))" 'tu-contraseña'
 const SUPERADMIN_USER = process.env.SUPERADMIN_USER || '';
-const SUPERADMIN_PASSWORD = process.env.SUPERADMIN_PASSWORD || '';
-const SUPERADMIN_ENABLED = Boolean(SUPERADMIN_USER && SUPERADMIN_PASSWORD);
+const SUPERADMIN_PASSWORD_HASH = (() => {
+  const b64 = (process.env.SUPERADMIN_PASSWORD_HASH_B64 || '').trim();
+  if (!b64) return '';
+  try {
+    return Buffer.from(b64, 'base64').toString('utf8');
+  } catch {
+    return '';
+  }
+})();
+const SUPERADMIN_ENABLED = Boolean(SUPERADMIN_USER && SUPERADMIN_PASSWORD_HASH);
+// Al cambiar la contraseña del superadmin (nuevo hash) o al subir manualmente
+// SUPERADMIN_EPOCH, este valor cambia y toda cookie de superadmin previa deja
+// de ser válida, sin tener que rotar SESSION_SECRET (que expulsaría a todos).
+const SUPERADMIN_EPOCH = process.env.SUPERADMIN_EPOCH || '0';
 
 // Buzón del formulario de contacto de la landing. Si el SMTP está configurado,
 // SMTP_USER existe siempre, así que el fallback garantiza destinatario; sin
@@ -1403,7 +1419,7 @@ app.get('/e/:eventId/qr', loadEvent, requireEventAdmin, requireStartDate, async 
 });
 
 // ---------- SuperAdministrador ----------
-// Panel en /admin con credenciales del .env (SUPERADMIN_USER / SUPERADMIN_PASSWORD).
+// Panel en /admin con credenciales del .env (SUPERADMIN_USER / SUPERADMIN_PASSWORD_HASH_B64).
 // Desde él se generan los códigos de invitación, se ven las cuentas activas y
 // se gestionan: más días de uso, más espacio, eliminar, reprogramar el inicio.
 
@@ -1415,9 +1431,21 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(ha, hb);
 }
 
+// Huella de la credencial de superadmin: depende del hash de la contraseña y de
+// SUPERADMIN_EPOCH. Se sella en la cookie al iniciar sesión y se re-verifica en
+// cada petición, de modo que cambiar la contraseña o subir el epoch invalida al
+// instante las sesiones ya emitidas.
+function superadminFingerprint() {
+  return crypto
+    .createHash('sha256')
+    .update(`${SUPERADMIN_PASSWORD_HASH}|${SUPERADMIN_EPOCH}`)
+    .digest('hex')
+    .slice(0, 32);
+}
+
 function requireSuperadmin(req, res, next) {
   if (!SUPERADMIN_ENABLED) return res.status(404).json({ error: 'No encontrado' });
-  if (req.session.superadmin) return next();
+  if (req.session.superadmin && req.session.saFp === superadminFingerprint()) return next();
   res.status(401).json({ error: 'No autorizado' });
 }
 
@@ -1426,13 +1454,16 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-app.post('/api/sa/login', loginLimiter, (req, res) => {
+app.post('/api/sa/login', loginLimiter, async (req, res) => {
   if (!SUPERADMIN_ENABLED) return res.status(404).json({ error: 'No encontrado' });
   const { username, password } = req.body || {};
   const userOk = safeEqual(username || '', SUPERADMIN_USER);
-  const passOk = safeEqual(password || '', SUPERADMIN_PASSWORD);
+  const passOk =
+    typeof password === 'string' && (await bcrypt.compare(password, SUPERADMIN_PASSWORD_HASH));
   if (!userOk || !passOk) return res.status(401).json({ error: 'Credenciales incorrectas' });
-  req.session.superadmin = true;
+  // Sesión limpia con solo el rol de superadmin: evita arrastrar campos de una
+  // sesión de usuario previa en la misma cookie.
+  req.session = { superadmin: true, saFp: superadminFingerprint() };
   res.json({ ok: true });
 });
 
@@ -1443,7 +1474,8 @@ app.post('/api/sa/logout', (req, res) => {
 
 app.get('/api/sa/me', (req, res) => {
   if (!SUPERADMIN_ENABLED) return res.status(404).json({ error: 'No encontrado' });
-  res.json({ superadmin: !!req.session.superadmin });
+  const ok = !!req.session.superadmin && req.session.saFp === superadminFingerprint();
+  res.json({ superadmin: ok });
 });
 
 // Almacenamiento global del servidor: total (disco real menos la reserva,
@@ -1671,8 +1703,14 @@ app.use((err, req, res, next) => {
   if (err.type === 'entity.too.large') {
     return res.status(413).json({ error: 'Petición demasiado grande' });
   }
-  console.error(err.message);
-  res.status(err.status || 400).json({ error: err.message });
+  // El detalle (rutas de disco, errores de sharp/fs, pila) solo va al log; al
+  // cliente un mensaje genérico para no revelar la estructura interna. Se
+  // conserva el código de estado cuando la petición es del cliente (p.ej. 400
+  // por JSON malformado) y se cae a 500 para los errores internos.
+  console.error(err.stack || err.message);
+  const status = err.status || err.statusCode || 500;
+  const message = status >= 500 ? 'Error interno del servidor' : 'Petición no válida';
+  res.status(status).json({ error: message });
 });
 
 app.listen(PORT, () => {
