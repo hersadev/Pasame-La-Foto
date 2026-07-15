@@ -631,15 +631,23 @@ async function sendMaybeWatermarked(req, res, ev, sourcePath, cacheDir) {
 
 // Tamaño total (bytes) de un directorio, incluyendo subcarpetas: aparte de las
 // fotos, cada evento guarda miniaturas y cachés de marca de agua que también
-// ocupan disco y deben contar para la cuota.
-function dirSize(dir) {
+// ocupan disco y deben contar para la cuota. Es asíncrono a propósito: el
+// recorrido puede tocar muchos archivos y, si fuese síncrono, bloquearía el
+// único hilo de Node durante todo el escaneo (y con él, a todos los usuarios).
+async function dirSize(dir) {
   let total = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0; // el directorio puede no existir todavía
+  }
+  for (const entry of entries) {
     const p = path.join(dir, entry.name);
-    if (entry.isDirectory()) total += dirSize(p);
+    if (entry.isDirectory()) total += await dirSize(p);
     else if (entry.isFile()) {
       try {
-        total += fs.statSync(p).size;
+        total += (await fs.promises.stat(p)).size;
       } catch {
         // el archivo puede desaparecer mientras recorremos; se ignora
       }
@@ -649,12 +657,35 @@ function dirSize(dir) {
 }
 
 // Espacio ocupado por todos los eventos juntos (bytes)
-function totalUploadsSize() {
+async function totalUploadsSize() {
   let total = 0;
-  for (const entry of fs.readdirSync(UPLOAD_DIR, { withFileTypes: true })) {
-    if (entry.isDirectory()) total += dirSize(path.join(UPLOAD_DIR, entry.name));
+  let entries;
+  try {
+    entries = await fs.promises.readdir(UPLOAD_DIR, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) total += await dirSize(path.join(UPLOAD_DIR, entry.name));
   }
   return total;
+}
+
+// El total global recorre TODO el disco de uploads. La ruta de subida —que un
+// invitado puede repetir sin autenticarse— lo consulta en cada petición, así
+// que se cachea unos segundos para no re-escanear el árbol entero cada vez y
+// convertir las subidas en un vector de saturación. Al pasar los chequeos se
+// suma de forma optimista lo que va a ocupar la petición, para que varias
+// subidas concurrentes dentro del TTL no lean un total desfasado a la baja.
+const GLOBAL_SIZE_TTL_MS = 10 * 1000;
+let globalSizeCache = { bytes: 0, at: 0 };
+
+async function totalUploadsSizeCached() {
+  const now = Date.now();
+  if (now - globalSizeCache.at < GLOBAL_SIZE_TTL_MS) return globalSizeCache.bytes;
+  const bytes = await totalUploadsSize();
+  globalSizeCache = { bytes, at: now };
+  return bytes;
 }
 
 // Límite global en bytes para las fotos: lo ya ocupado más el espacio libre
@@ -687,8 +718,15 @@ function eventQuotaGB(eventId) {
 // superior de lo que llega para frenar antes de escribir nada en disco; multer
 // impone además el límite real por archivo, así que un Content-Length falseado
 // no permite saltarse la cuota más allá de una petición.
-function checkTotalSpace(req, res, next) {
-  const incoming = parseInt(req.headers['content-length'], 10) || 0;
+async function checkTotalSpace(req, res, next) {
+  // Sin un Content-Length válido (p.ej. Transfer-Encoding: chunked) las cotas de
+  // abajo sumarían 0 y se saltarían el tope por petición y los pre-chequeos de
+  // cuota, dejando escribir hasta ~500 MB (límite de multer) por envío. Se exige
+  // la longitud declarada; los navegadores siempre la envían en un multipart.
+  const incoming = Number.parseInt(req.headers['content-length'], 10);
+  if (!Number.isFinite(incoming) || incoming < 0) {
+    return res.status(411).json({ error: 'Falta la longitud de la subida' });
+  }
 
   // Tope duro por petición: sin él, 20 archivos al máximo permitido por multer
   // harían peticiones enormes de forma "legítima". Un Content-Length falseado a
@@ -697,17 +735,24 @@ function checkTotalSpace(req, res, next) {
     return res.status(413).json({ error: `Subida demasiado grande (máximo ${MAX_REQUEST_MB} MB por envío)` });
   }
 
-  const eventUsed = dirSize(req.event.dir);
-  if (eventUsed + incoming > eventQuotaGB(req.event.id) * 1024 ** 3) {
-    return res.status(507).json({ error: 'Se ha alcanzado el espacio máximo del evento' });
-  }
+  try {
+    const eventUsed = await dirSize(req.event.dir);
+    if (eventUsed + incoming > eventQuotaGB(req.event.id) * 1024 ** 3) {
+      return res.status(507).json({ error: 'Se ha alcanzado el espacio máximo del evento' });
+    }
 
-  const globalUsed = totalUploadsSize();
-  if (globalUsed + incoming > globalLimitBytes(globalUsed)) {
-    return res.status(507).json({ error: 'El almacenamiento del servidor está lleno por ahora, inténtalo más tarde' });
-  }
+    const globalUsed = await totalUploadsSizeCached();
+    if (globalUsed + incoming > globalLimitBytes(globalUsed)) {
+      return res.status(507).json({ error: 'El almacenamiento del servidor está lleno por ahora, inténtalo más tarde' });
+    }
 
-  next();
+    // Reflejar de forma optimista lo que ocupará esta petición en la caché, para
+    // que subidas concurrentes dentro del TTL no lean un total ya desfasado.
+    globalSizeCache.bytes += incoming;
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 // Comprime una imagen recién subida y genera su miniatura.
@@ -1289,8 +1334,8 @@ app.delete('/api/e/:eventId/admin/media/:name', loadEvent, requireEventAdmin, (r
 
 // Espacio ocupado por el evento frente a su cuota, para avisar al organizador
 // antes de que las subidas empiecen a rechazarse.
-app.get('/api/e/:eventId/admin/storage', loadEvent, requireEventAdmin, (req, res) => {
-  const usedBytes = dirSize(req.event.dir);
+app.get('/api/e/:eventId/admin/storage', loadEvent, requireEventAdmin, async (req, res) => {
+  const usedBytes = await dirSize(req.event.dir);
   const maxBytes = eventQuotaGB(req.event.id) * 1024 ** 3;
   res.json({ usedBytes, maxBytes, pct: Math.min(1, usedBytes / maxBytes) });
 });
@@ -1480,8 +1525,8 @@ app.get('/api/sa/me', (req, res) => {
 
 // Almacenamiento global del servidor: total (disco real menos la reserva,
 // con MAX_GLOBAL_GB como techo si está definido), ocupado y libre
-app.get('/api/sa/storage', requireSuperadmin, (req, res) => {
-  const usedBytes = totalUploadsSize();
+app.get('/api/sa/storage', requireSuperadmin, async (req, res) => {
+  const usedBytes = await totalUploadsSize();
   const totalBytes = globalLimitBytes(usedBytes);
   res.json({
     totalBytes,
@@ -1492,25 +1537,27 @@ app.get('/api/sa/storage', requireSuperadmin, (req, res) => {
 });
 
 // Cuentas registradas, con su ventana de uso y el espacio que ocupan
-app.get('/api/sa/users', requireSuperadmin, (req, res) => {
+app.get('/api/sa/users', requireSuperadmin, async (req, res) => {
   const users = readUsers();
-  const list = Object.entries(users).map(([username, account]) => {
-    const ev = eventDirs(account.eventId);
-    const window = eventWindow(account);
-    return {
-      username,
-      email: account.email || '',
-      eventId: account.eventId,
-      createdAt: account.createdAt || null,
-      startDate: window.startDate,
-      usageDays: account.usageDays || DEFAULT_USAGE_DAYS,
-      daysLeft: window.daysLeft,
-      expiresAt: window.expiresAt,
-      active: window.active,
-      usedBytes: fs.existsSync(ev.dir) ? dirSize(ev.dir) : 0,
-      quotaGB: eventQuotaGB(account.eventId),
-    };
-  });
+  const list = await Promise.all(
+    Object.entries(users).map(async ([username, account]) => {
+      const ev = eventDirs(account.eventId);
+      const window = eventWindow(account);
+      return {
+        username,
+        email: account.email || '',
+        eventId: account.eventId,
+        createdAt: account.createdAt || null,
+        startDate: window.startDate,
+        usageDays: account.usageDays || DEFAULT_USAGE_DAYS,
+        daysLeft: window.daysLeft,
+        expiresAt: window.expiresAt,
+        active: window.active,
+        usedBytes: await dirSize(ev.dir),
+        quotaGB: eventQuotaGB(account.eventId),
+      };
+    })
+  );
   res.json(list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
 });
 
