@@ -198,6 +198,14 @@
       <svg viewBox="0 0 24 24"><path d="M9 5.4 15.6 12 9 18.6 10.4 20l8-8-8-8L9 5.4z"/></svg>
     </button>
     <div id="viewerContent" class="viewer-content"></div>
+    <div id="viewerCaption" class="viewer-caption" hidden>
+      <span id="viewerLabelText" class="viewer-label"></span>
+      <button id="viewerLabelEdit" class="btn-glass" hidden>✏️ Añadir etiqueta</button>
+      <form id="viewerLabelForm" class="viewer-label-form" hidden>
+        <input id="viewerLabelInput" type="text" maxlength="60" placeholder="Ej. ¡El brindis!" />
+        <button type="submit" class="btn-glass">Guardar</button>
+      </form>
+    </div>
     <div id="viewerActions" class="viewer-actions" hidden>
       <a id="viewerDownload" class="btn-glass" href="#">⬇ Descargar</a>
       <button id="viewerDelete" class="btn-glass btn-glass-danger">🗑 Borrar</button>

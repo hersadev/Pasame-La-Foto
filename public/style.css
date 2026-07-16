@@ -297,6 +297,25 @@ body.is-admin .tile img {
   }
 }
 
+/* Etiqueta escrita por quien subió la foto */
+
+.tile-label {
+  position: absolute;
+  top: 0.45rem;
+  left: 0.45rem;
+  max-width: calc(100% - 0.9rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: rgba(20, 18, 16, 0.55);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 0.78rem;
+  pointer-events: none;
+}
+
 /* Acciones de admin sobre cada foto */
 
 .tile-actions {
@@ -900,6 +919,52 @@ body.selecting .fab {
 
 .viewer-actions[hidden] {
   display: none;
+}
+
+/* Etiqueta de la foto en el visor, sobre la fila de acciones */
+
+.viewer-caption {
+  position: absolute;
+  bottom: calc(4.6rem + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 95;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  max-width: 92vw;
+}
+
+.viewer-caption[hidden],
+.viewer-label[hidden],
+.viewer-label-form[hidden] {
+  display: none;
+}
+
+.viewer-label {
+  color: #fff;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 1.05rem;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-label-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.viewer-label-form input {
+  width: min(60vw, 320px);
+  padding: 0.6rem 1rem;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  font: inherit;
 }
 
 .btn-glass {
@@ -1530,7 +1595,7 @@ a.link-btn {
 
 .polaroid {
   position: relative;
-  width: clamp(118px, 28vw, 190px);
+  width: clamp(118px, 28vw, 250px);
   background: #fffdf8;
   border: 1px solid var(--line);
   border-radius: 10px;

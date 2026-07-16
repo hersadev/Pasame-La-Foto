@@ -59,6 +59,11 @@ const viewerContent = document.getElementById('viewerContent');
 const viewerActions = document.getElementById('viewerActions');
 const viewerDownload = document.getElementById('viewerDownload');
 const viewerDelete = document.getElementById('viewerDelete');
+const viewerCaption = document.getElementById('viewerCaption');
+const viewerLabelText = document.getElementById('viewerLabelText');
+const viewerLabelEdit = document.getElementById('viewerLabelEdit');
+const viewerLabelForm = document.getElementById('viewerLabelForm');
+const viewerLabelInput = document.getElementById('viewerLabelInput');
 
 // Disuasión básica contra guardar archivos (no es seguridad real).
 // El admin queda exento y puede usar el click derecho con normalidad.
@@ -574,6 +579,13 @@ function renderGallery() {
     img.loading = 'lazy';
     tile.appendChild(img);
 
+    if (item.label) {
+      const label = document.createElement('span');
+      label.className = 'tile-label';
+      label.textContent = item.label;
+      tile.appendChild(label);
+    }
+
     if (state.isAdmin) {
       const actions = document.createElement('div');
       actions.className = 'tile-actions';
@@ -665,7 +677,56 @@ function renderViewer() {
   viewerDownload.href = state.isAdmin
     ? `${API}/admin/download/${item.id}`
     : `${API}/download/${item.id}`;
+
+  // Etiqueta: visible para todos; editable solo por quien subió la foto
+  viewerLabelText.textContent = item.label || '';
+  viewerLabelText.hidden = !item.label;
+  viewerLabelEdit.hidden = !item.mine;
+  viewerLabelEdit.textContent = item.label ? '✏️ Editar etiqueta' : '✏️ Añadir etiqueta';
+  viewerLabelForm.hidden = true;
+  viewerCaption.hidden = !item.label && !item.mine;
 }
+
+viewerLabelEdit.addEventListener('click', () => {
+  const item = state.items[state.viewerIndex];
+  if (!item) return;
+  viewerLabelInput.value = item.label || '';
+  viewerLabelForm.hidden = false;
+  viewerLabelEdit.hidden = true;
+  viewerLabelText.hidden = true;
+  viewerLabelInput.focus();
+});
+
+// Mientras se escribe, ni las flechas cambian de foto ni Escape cierra el
+// visor: Escape solo repliega el formulario de la etiqueta.
+viewerLabelInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Escape') renderViewer();
+});
+
+viewerLabelForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const item = state.items[state.viewerIndex];
+  if (!item) return;
+  const label = viewerLabelInput.value.trim();
+  const res = await fetch(`${API}/media/${encodeURIComponent(item.id)}/label`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
+  if (res.ok) {
+    item.label = (await res.json()).label;
+    renderViewer();
+    renderGallery();
+    toast(item.label ? 'Etiqueta guardada' : 'Etiqueta quitada');
+  } else {
+    let msg = 'No se pudo guardar la etiqueta';
+    try {
+      msg = (await res.json()).error || msg;
+    } catch {}
+    toast(msg, true);
+  }
+});
 
 function closeViewer() {
   viewer.hidden = true;
