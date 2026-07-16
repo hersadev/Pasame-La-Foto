@@ -276,6 +276,16 @@ const uploadLimiter = rateLimit({
   message: { error: 'Demasiadas subidas seguidas, prueba de nuevo en unos minutos' },
 });
 
+// Etiquetas de fotos: escrituras pequeñas pero tocan disco. Mismo criterio
+// holgado que las subidas: muchos invitados comparten la IP del WiFi del local.
+const labelLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados cambios seguidos, prueba de nuevo en unos minutos' },
+});
+
 // Máximo 20 intentos de restablecer contraseña por IP cada 15 minutos. El token
 // es de 256 bits (imposible de adivinar), pero el límite evita usar esta ruta
 // como martillo de lecturas de disco sin coste para el atacante.
@@ -1223,8 +1233,11 @@ app.get('/api/e/:eventId/info', loadEvent, requireActiveEvent, (req, res) => {
 app.post('/api/e/:eventId/upload', uploadLimiter, loadEvent, requireActiveEventStrict, checkTotalSpace, upload.array('files', 20), async (req, res, next) => {
   try {
     const downloadable = req.body.downloadable === 'all' ? 'all' : 'admin';
+    // Identificador anónimo del invitado: viaja firmado en la cookie de sesión
+    // y marca la propiedad de cada foto (quién puede etiquetarla después).
+    if (!req.session.gid) req.session.gid = crypto.randomBytes(16).toString('hex');
     const meta = readMediaMeta(req.event);
-    for (const f of req.files) meta[f.filename] = { downloadable };
+    for (const f of req.files) meta[f.filename] = { downloadable, owner: req.session.gid };
     writeMediaMeta(req.event, meta);
     res.json({ ok: true, count: req.files.length });
     // La compresión y las miniaturas se generan después de responder: no
@@ -1246,6 +1259,7 @@ app.get('/api/e/:eventId/media', loadEvent, requireActiveEvent, (req, res) => {
   // imagen ya vista para esa misma URL aunque el servidor mande "no-store".
   // Con esta marca en la query, admin e invitado nunca comparten URL.
   const roleTag = admin ? 'a' : 'g';
+  const gid = req.session.gid || null;
   const files = fs
     .readdirSync(ev.dir)
     .filter((f) => mediaType(f) !== 'other')
@@ -1259,6 +1273,8 @@ app.get('/api/e/:eventId/media', loadEvent, requireActiveEvent, (req, res) => {
         thumb: hasThumb ? `/e/${ev.id}/thumbs/${path.basename(thumbPathFor(ev, f))}?v=${roleTag}` : null,
         uploadedAt: stat.mtimeMs,
         canDownload: admin || canGuestDownload(f, meta),
+        label: meta[f]?.label || '',
+        mine: Boolean(gid && meta[f]?.owner === gid),
       };
     })
     .sort((a, b) => b.uploadedAt - a.uploadedAt);
@@ -1291,6 +1307,29 @@ app.get('/api/e/:eventId/download/:name', loadEvent, requireActiveEvent, (req, r
     return res.status(403).json({ error: 'Descarga no permitida' });
   }
   res.download(filePath);
+});
+
+// Etiqueta de una foto: solo puede ponerla, cambiarla o quitarla quien la
+// subió. La propiedad se reconoce por el id anónimo (gid) que la cookie de
+// sesión firmada guarda desde la subida; sin cuentas de invitado no hay señal
+// más fuerte que esa. Vacía, la etiqueta se elimina.
+app.post('/api/e/:eventId/media/:name/label', labelLimiter, loadEvent, requireActiveEventStrict, (req, res) => {
+  const name = req.params.name;
+  const filePath = safeFilePath(req.event, name);
+  if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'No encontrado' });
+  const meta = readMediaMeta(req.event);
+  const gid = req.session.gid;
+  if (!gid || meta[name]?.owner !== gid) {
+    return res.status(403).json({ error: 'Solo quien subió la foto puede etiquetarla' });
+  }
+  const label = String((req.body || {}).label ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+  if (label) meta[name].label = label;
+  else delete meta[name].label;
+  writeMediaMeta(req.event, meta);
+  res.json({ ok: true, label });
 });
 
 // ---------- API admin del evento ----------
